@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(cat:*)",
+      "Bash(timeout 5 python3:*)",
+      "Bash(timeout 3 python3:*)",
+      "Bash(timeout 2 python3:*)",
+      "Bash(chmod:*)",
+      "Bash(./RUN_ALL_TESTS.sh:*)",
+      "Bash(bash:*)",
+      "Bash(curl:*)",
+      "Bash(file:*)",
+      "Bash(for dir in /home/jason/image_to_stl/samples/*/)",
+      "Bash(gh auth:*)",
+      "Bash(git --version:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

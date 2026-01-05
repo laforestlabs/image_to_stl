@@ -1,0 +1,20 @@
+{
+  "name": "Default Image to STL Process",
+  "operations": [
+    {
+      "type": "set_lithophane_parameters",
+      "parameters": {
+        "width_mm": 100.0,
+        "height_mm": 100.0,
+        "min_thickness_mm": 0.8,
+        "max_thickness_mm": 5.0,
+        "pixels_per_mm": 2.0,
+        "blur": 0.0,
+        "angle": 75.0,
+        "invert": false,
+        "crop_mode": "crop_to_size",
+        "background_tint": 0.0
+      }
+    }
+  ]
+}
