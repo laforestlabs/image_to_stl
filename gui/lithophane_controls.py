@@ -8,10 +8,28 @@ from PySide6.QtWidgets import (
     QFrame
 )
 from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QWheelEvent
+
+
+class NoScrollDoubleSpinBox(QDoubleSpinBox):
+    """DoubleSpinBox that ignores mouse wheel events"""
+    def wheelEvent(self, event: QWheelEvent):
+        event.ignore()
+
+
+class NoScrollSlider(QSlider):
+    """Slider that ignores mouse wheel events"""
+    def wheelEvent(self, event: QWheelEvent):
+        event.ignore()
 
 
 class SliderWithInput(QWidget):
-    """A slider with a synchronized text input"""
+    """A slider with a synchronized text input.
+
+    Only emits value_changed when:
+    - Slider is released (not while dragging)
+    - Enter is pressed in the spinbox
+    """
     value_changed = Signal(float)
 
     def __init__(self, label: str, min_val: float, max_val: float,
@@ -30,43 +48,55 @@ class SliderWithInput(QWidget):
         # Slider and spinbox row
         row = QHBoxLayout()
 
-        # Slider
-        self.slider = QSlider(Qt.Horizontal)
+        # Slider (no scroll)
+        self.slider = NoScrollSlider(Qt.Horizontal)
         self.slider.setMinimum(int(min_val * self.multiplier))
         self.slider.setMaximum(int(max_val * self.multiplier))
         self.slider.setValue(int(default * self.multiplier))
-        self.slider.valueChanged.connect(self._on_slider_changed)
+        # Sync spinbox display while dragging (but don't emit signal)
+        self.slider.valueChanged.connect(self._on_slider_moved)
+        # Only emit signal when slider is released
+        self.slider.sliderReleased.connect(self._on_slider_released)
         row.addWidget(self.slider, stretch=3)
 
-        # Spinbox
-        self.spinbox = QDoubleSpinBox()
+        # Spinbox (no scroll)
+        self.spinbox = NoScrollDoubleSpinBox()
         self.spinbox.setMinimum(min_val)
         self.spinbox.setMaximum(max_val)
         self.spinbox.setDecimals(decimals)
         self.spinbox.setValue(default)
-        self.spinbox.valueChanged.connect(self._on_spinbox_changed)
+        self.spinbox.setKeyboardTracking(False)  # Don't emit while typing
+        # Only emit when editing is finished (Enter pressed or focus lost)
+        self.spinbox.editingFinished.connect(self._on_spinbox_editing_finished)
         row.addWidget(self.spinbox, stretch=1)
 
         layout.addLayout(row)
 
         self._updating = False
 
-    def _on_slider_changed(self, value):
+    def _on_slider_moved(self, value):
+        """Sync spinbox display while slider is being dragged (no signal emission)"""
         if self._updating:
             return
         self._updating = True
         float_val = value / self.multiplier
         self.spinbox.setValue(float_val)
-        self.value_changed.emit(float_val)
         self._updating = False
 
-    def _on_spinbox_changed(self, value):
+    def _on_slider_released(self):
+        """Emit signal only when slider is released"""
+        if self._updating:
+            return
+        self.value_changed.emit(self.spinbox.value())
+
+    def _on_spinbox_editing_finished(self):
+        """Emit signal when Enter is pressed or spinbox loses focus"""
         if self._updating:
             return
         self._updating = True
-        self.slider.setValue(int(value * self.multiplier))
-        self.value_changed.emit(value)
+        self.slider.setValue(int(self.spinbox.value() * self.multiplier))
         self._updating = False
+        self.value_changed.emit(self.spinbox.value())
 
     def value(self) -> float:
         return self.spinbox.value()
