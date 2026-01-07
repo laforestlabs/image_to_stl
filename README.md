@@ -1,147 +1,98 @@
-# Image to STL Converter
+# Image to STL Lithophane Converter
 
-A PySide6 GUI application for converting images to STL files for 3D printing.
+A desktop application for converting images into 3D-printable lithophane STL files.
+
+![PySide6](https://img.shields.io/badge/PySide6-Qt-green) ![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue)
 
 ## Features
 
-- Load and save custom processing workflows as JSON files
-- Sequential image processing operations:
-  - Resize images to specific dimensions with PPI control
-  - Convert to grayscale with optional inversion
-  - Add borders
-  - Set thickness parameters for 3D model generation
-- Mesh statistics display (triangles, dimensions)
-- Edit and modify processing workflows through the GUI
-- Export STL files ready for 3D printing
+- **Interactive Crop Tool** - Drag and resize a crop region directly on the image preview
+- **Real-time Preview** - See the processed grayscale result before exporting
+- **Lithophane Parameters** - Full control over dimensions, thickness, blur, and build angle
+- **Sample Images** - Includes 100+ categorized sample images to get started
+- **Process Saving** - Save and load parameter presets as JSON files
 
 ## Installation
 
-1. Create a virtual environment (recommended):
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+# Clone the repository
+git clone https://github.com/laforestlabs/image_to_stl.git
+cd image_to_stl
 
-2. Install dependencies:
-```bash
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-Run the application:
 ```bash
 python main.py
 ```
 
-### Workflow
+### Quick Start
 
-1. **Load a Process**: Click "Load Process" to load an existing process JSON file, or use the default process that loads automatically
-2. **Load an Image**: Click "Load Image" to select an image file (PNG, JPG, BMP, TIFF)
-3. **Edit Process** (optional): Use the Process Editor to add, remove, or modify operations:
-   - Add Operation: Create new processing steps
-   - Edit: Modify existing operations
-   - Remove: Delete operations
-   - Move Up/Down: Reorder operations
-4. **Process Image**: Click "Process Image" to apply the operations and generate the STL model
-5. **Preview**: View mesh statistics (triangle count, dimensions) in the preview panel
-6. **Export**: Click "Export STL" to save the model as an STL file
-7. **View**: Open the exported STL in MeshLab, Blender, or your 3D printer slicer software
+1. The app loads with a random sample image on startup
+2. Use the **crop tool** to select a region (drag the box or resize corners)
+3. Adjust **lithophane parameters** in the right panel
+4. Click **Export STL** to save your lithophane
 
-### Process Operations
+### Crop Tool
 
-- **Resize**: Scale image to specific dimensions with PPI control
-  - Width/Height: Physical dimensions
-  - Unit: mm or inches
-  - PPI: Pixels per inch resolution
-  - Maintain Aspect Ratio: Preserve original proportions
+- **Drag inside** the red box to move the crop region
+- **Drag corner handles** (white circles) to resize
+- Click **Reset Crop** to select the full image
 
-- **Convert to Grayscale**: Convert to grayscale color space
-  - Invert: Reverse brightness values
+### Lithophane Parameters
 
-- **Add Border**: Add a border around the image
-  - Size: Border width in pixels
-  - Color: Border color (0-255)
+| Parameter | Description |
+|-----------|-------------|
+| **Width/Height** | Physical dimensions in mm |
+| **Min Thickness** | Thickness at brightest areas (typically 0.6-1.0mm) |
+| **Max Thickness** | Thickness at darkest areas (typically 3-5mm) |
+| **Resolution** | Pixels per mm (higher = more detail, larger file) |
+| **Blur** | Smoothing to reduce noise |
+| **Build Angle** | Angle for the back surface (for easier printing) |
+| **Crop Mode** | Crop to size or keep full image with padding |
+| **Invert** | Flip light/dark (for negative images) |
 
-- **Set Thickness**: Define 3D model height parameters
-  - Base Thickness: Minimum height in mm
-  - Max Thickness: Maximum height in mm (bright areas)
+### Tips for Good Lithophanes
 
-### Saving and Loading Processes
-
-- **Save Process**: Save changes to the current process file
-- **Save Process As**: Save the process to a new JSON file
-- **Load Process**: Open an existing process JSON file
-
-Custom processes are stored as JSON files that can be shared and reused.
+- **High contrast images** work best
+- **Portraits** benefit from slightly higher blur (1-2)
+- Start with **2 pixels/mm** resolution, increase for fine detail
+- **0.8mm min / 4mm max thickness** is a good starting point
+- Print with **white or natural PLA** for best results
 
 ## Project Structure
 
 ```
 image_to_stl/
-├── main.py                 # Application entry point
+├── main.py                     # Entry point
 ├── core/
-│   ├── __init__.py
-│   ├── process.py          # Process and Operation models
-│   ├── image_processor.py  # Image processing operations
-│   └── stl_generator.py    # STL mesh generation
+│   ├── image_processor.py      # Image processing and height map generation
+│   ├── process.py              # Process/operation data models
+│   └── stl_generator.py        # STL mesh generation
 ├── gui/
-│   ├── __init__.py
-│   ├── main_window.py      # Main application window
-│   ├── process_editor.py   # Process editing widget
-│   └── preview_widget.py   # 3D preview widget
+│   ├── main_window.py          # Main application window
+│   ├── crop_preview_widget.py  # Interactive crop tool
+│   ├── lithophane_controls.py  # Parameter sliders and inputs
+│   └── process_editor.py       # Process list editor
 ├── processes/
-│   └── default.json        # Default process
-└── requirements.txt        # Python dependencies
-```
-
-## Example Process JSON
-
-```json
-{
-  "name": "My Custom Process",
-  "operations": [
-    {
-      "type": "resize",
-      "parameters": {
-        "width": 100,
-        "height": 100,
-        "unit": "mm",
-        "ppi": 96,
-        "maintain_aspect_ratio": true
-      }
-    },
-    {
-      "type": "grayscale",
-      "parameters": {
-        "invert": false
-      }
-    },
-    {
-      "type": "add_border",
-      "parameters": {
-        "size": 10,
-        "color": 0
-      }
-    },
-    {
-      "type": "set_thickness",
-      "parameters": {
-        "base_thickness_mm": 1.0,
-        "max_thickness_mm": 5.0
-      }
-    }
-  ]
-}
+│   └── default.json            # Default parameters
+└── samples/                    # Sample images by category
 ```
 
 ## Dependencies
 
-- PySide6: Qt-based GUI framework
-- NumPy: Numerical operations
-- Pillow: Image processing
-- numpy-stl: STL file generation
+- **PySide6** - Qt GUI framework
+- **Pillow** - Image processing
+- **NumPy** - Numerical operations
+- **numpy-stl** - STL file generation
 
 ## License
 
-This project is open source and available for modification and distribution.
+MIT License - feel free to use and modify.
