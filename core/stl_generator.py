@@ -26,11 +26,12 @@ class STLGenerator:
         rows, cols = height_map.shape
 
         # Create vertices for the top surface
+        # Note: Flip Y so image top (row 0) maps to high Y, making the STL right-side-up
         vertices_top = []
         for i in range(rows):
             for j in range(cols):
                 x = j * pixel_size_mm
-                y = i * pixel_size_mm
+                y = (rows - 1 - i) * pixel_size_mm
                 z = height_map[i, j]
                 vertices_top.append([x, y, z])
 
@@ -39,7 +40,7 @@ class STLGenerator:
         for i in range(rows):
             for j in range(cols):
                 x = j * pixel_size_mm
-                y = i * pixel_size_mm
+                y = (rows - 1 - i) * pixel_size_mm
                 z = 0  # Bottom is at z=0
                 vertices_bottom.append([x, y, z])
 
@@ -120,7 +121,7 @@ class STLGenerator:
                 stl_mesh.vectors[i][j] = all_vertices[face[j]]
 
         # Apply rotation around X-axis if angle is not 0
-        if angle != 0:
+        if angle != 0 and angle != 90:
             angle_rad = np.radians(angle)
             cos_a = np.cos(angle_rad)
             sin_a = np.sin(angle_rad)
@@ -133,9 +134,41 @@ class STLGenerator:
                     stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
                     stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
 
-            # Translate so bottom sits on build plate (z >= 0)
+            # For angles between 0 and 90, create a flat bottom
+            min_z = stl_mesh.vectors[:, :, 2].min()
+            max_z = stl_mesh.vectors[:, :, 2].max()
+            model_height = max_z - min_z
+
+            # Calculate how much to lower for good flat bottom contact
+            target_flat_width = 2.0  # mm
+            flat_depth = max(target_flat_width * np.sin(angle_rad), model_height * 0.01)
+
+            # Move mesh so that min_z + flat_depth = 0
+            stl_mesh.vectors[:, :, 2] -= (min_z + flat_depth)
+
+            # Simple vertex clamping approach - clamp all vertices below z=0 to z=0
+            # This creates a flat bottom by collapsing the bottom of the mesh to the z=0 plane
+            # The mesh remains manifold because we preserve all triangle connectivity
+            stl_mesh.vectors[:, :, 2] = np.maximum(stl_mesh.vectors[:, :, 2], 0.0)
+
+        elif angle == 90:
+            # Vertical orientation - rotate but no clipping needed
+            angle_rad = np.radians(angle)
+            cos_a = np.cos(angle_rad)
+            sin_a = np.sin(angle_rad)
+
+            for i in range(len(stl_mesh.vectors)):
+                for j in range(3):
+                    y = stl_mesh.vectors[i][j][1]
+                    z = stl_mesh.vectors[i][j][2]
+                    stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
+                    stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
+
+            # Translate so bottom sits on build plate
             min_z = stl_mesh.vectors[:, :, 2].min()
             stl_mesh.vectors[:, :, 2] -= min_z
+
+        # For angle == 0, no rotation needed, mesh already has flat bottom
 
         self.mesh = stl_mesh
         return stl_mesh
