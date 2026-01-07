@@ -41,9 +41,10 @@ class ProcessingWorker(QThread):
                 crop_rect=self.crop_rect
             )
 
-            # Generate STL
+            # Generate STL with correct pixel size for proper dimensions
             angle = self.image_processor.get_angle()
-            self.stl_generator.generate_from_heightmap(height_map, angle=angle)
+            pixel_size_mm = self.image_processor.get_pixel_size_mm()
+            self.stl_generator.generate_from_heightmap(height_map, pixel_size_mm=pixel_size_mm, angle=angle)
 
             self.finished.emit(height_map)
         except Exception as e:

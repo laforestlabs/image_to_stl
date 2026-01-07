@@ -14,6 +14,7 @@ class ImageProcessor:
         self.current_image: Optional[Image.Image] = None
         self.height_map: Optional[np.ndarray] = None
         self.angle: float = 75.0  # Build angle in degrees
+        self.pixel_size_mm: float = 0.5  # Physical size of each pixel (1/pixels_per_mm)
 
     def execute_process(self, image_path: str, process: Process, crop_rect: tuple = None) -> np.ndarray:
         """
@@ -105,6 +106,7 @@ class ImageProcessor:
         # Default 2 pixels/mm gives good quality without excessive triangles
         # (100x100mm = 200x200 pixels = ~160k triangles, reasonable for preview)
         pixels_per_mm = params.get("pixels_per_mm", 2.0)
+        self.pixel_size_mm = 1.0 / pixels_per_mm  # Store for STL generation
         target_width_pixels = int(width_mm * pixels_per_mm)
         target_height_pixels = int(height_mm * pixels_per_mm)
 
@@ -205,3 +207,7 @@ class ImageProcessor:
     def get_angle(self) -> float:
         """Get the build angle in degrees"""
         return self.angle
+
+    def get_pixel_size_mm(self) -> float:
+        """Get the pixel size in mm (1/pixels_per_mm)"""
+        return self.pixel_size_mm
