@@ -437,6 +437,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Process has no operations")
             return
 
+        # If a worker is already running, wait for it to finish first
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.wait()
+
         # Show loading dialog
         self.loading_dialog = LoadingDialog(self)
 
