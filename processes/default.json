@@ -13,7 +13,10 @@
         "angle": 75.0,
         "invert": false,
         "crop_mode": "crop_to_size",
-        "background_tint": 0.0
+        "background_tint": 0.0,
+        "border_width_mm": 0.0,
+        "border_intensity": 50.0,
+        "border_texture": "solid"
       }
     }
   ]

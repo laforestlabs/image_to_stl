@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QDoubleSpinBox, QSpinBox, QCheckBox,
     QRadioButton, QButtonGroup, QGroupBox, QScrollArea,
-    QFrame
+    QFrame, QComboBox
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QWheelEvent
@@ -66,8 +66,8 @@ class SliderWithInput(QWidget):
         self.spinbox.setDecimals(decimals)
         self.spinbox.setValue(default)
         self.spinbox.setKeyboardTracking(False)  # Don't emit while typing
-        # Only emit when editing is finished (Enter pressed or focus lost)
-        self.spinbox.editingFinished.connect(self._on_spinbox_editing_finished)
+        # Only emit when Enter is pressed (not on focus loss, which causes loops with dialogs)
+        self.spinbox.lineEdit().returnPressed.connect(self._on_spinbox_enter_pressed)
         row.addWidget(self.spinbox, stretch=1)
 
         layout.addLayout(row)
@@ -89,8 +89,8 @@ class SliderWithInput(QWidget):
             return
         self.value_changed.emit(self.spinbox.value())
 
-    def _on_spinbox_editing_finished(self):
-        """Emit signal when Enter is pressed or spinbox loses focus"""
+    def _on_spinbox_enter_pressed(self):
+        """Emit signal when Enter is pressed in spinbox"""
         if self._updating:
             return
         self._updating = True
@@ -203,6 +203,36 @@ class LithophaneControls(QWidget):
 
         layout.addWidget(crop_group)
 
+        # Border group
+        border_group = QGroupBox("Border")
+        border_layout = QVBoxLayout(border_group)
+
+        self.border_width_control = SliderWithInput("Border Width (mm)", 0, 20, 0, decimals=1)
+        self.border_width_control.value_changed.connect(self._emit_changed)
+        border_layout.addWidget(self.border_width_control)
+
+        self.border_intensity_control = SliderWithInput("Border Intensity (0%=thin, 100%=thick)", 0, 100, 50, decimals=0)
+        self.border_intensity_control.value_changed.connect(self._emit_changed)
+        border_layout.addWidget(self.border_intensity_control)
+
+        # Border texture dropdown
+        texture_row = QHBoxLayout()
+        texture_row.addWidget(QLabel("Border Texture:"))
+        self.border_texture_combo = QComboBox()
+        self.border_texture_combo.addItems([
+            "Solid",
+            "Gradient (fade inward)",
+            "Ribbed (vertical lines)",
+            "Dotted (perforated)",
+            "Wave (sine pattern)",
+            "Crosshatch"
+        ])
+        self.border_texture_combo.currentIndexChanged.connect(self._emit_changed)
+        texture_row.addWidget(self.border_texture_combo)
+        border_layout.addLayout(texture_row)
+
+        layout.addWidget(border_group)
+
         # Options group
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout(options_group)
@@ -230,6 +260,9 @@ class LithophaneControls(QWidget):
     def get_parameters(self) -> dict:
         """Get current parameters as a dictionary"""
         crop_mode = "crop_to_size" if self.crop_to_size_radio.isChecked() else "keep_full_image"
+        # Map combo box index to texture name
+        texture_names = ["solid", "gradient", "ribbed", "dotted", "wave", "crosshatch"]
+        border_texture = texture_names[self.border_texture_combo.currentIndex()]
         return {
             "width_mm": self.width_control.value(),
             "height_mm": self.height_control.value(),
@@ -240,6 +273,9 @@ class LithophaneControls(QWidget):
             "angle": self.angle_control.value(),
             "crop_mode": crop_mode,
             "background_tint": self.background_tint_control.value(),
+            "border_width_mm": self.border_width_control.value(),
+            "border_intensity": self.border_intensity_control.value(),
+            "border_texture": border_texture,
             "invert": self.invert_checkbox.isChecked()
         }
 
@@ -268,6 +304,14 @@ class LithophaneControls(QWidget):
                 self.keep_full_radio.setChecked(True)
         if "background_tint" in params:
             self.background_tint_control.setValue(params["background_tint"])
+        if "border_width_mm" in params:
+            self.border_width_control.setValue(params["border_width_mm"])
+        if "border_intensity" in params:
+            self.border_intensity_control.setValue(params["border_intensity"])
+        if "border_texture" in params:
+            texture_names = ["solid", "gradient", "ribbed", "dotted", "wave", "crosshatch"]
+            if params["border_texture"] in texture_names:
+                self.border_texture_combo.setCurrentIndex(texture_names.index(params["border_texture"]))
         if "invert" in params:
             self.invert_checkbox.setChecked(params["invert"])
 

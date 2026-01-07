@@ -1,8 +1,9 @@
 """
 Image processing operations and executor
 """
+import math
 import numpy as np
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter, ImageDraw
 from typing import Optional
 from core.process import Process, Operation
 
@@ -183,6 +184,14 @@ class ImageProcessor:
         if blur > 0:
             self.current_image = self.current_image.filter(ImageFilter.GaussianBlur(radius=blur))
 
+        # Apply border if specified
+        border_width_mm = params.get("border_width_mm", 0.0)
+        if border_width_mm > 0:
+            border_width_pixels = int(border_width_mm * pixels_per_mm)
+            border_intensity = params.get("border_intensity", 50.0) / 100.0  # 0-1
+            border_texture = params.get("border_texture", "solid")
+            self._apply_border(border_width_pixels, border_intensity, border_texture)
+
         # Convert image to numpy array (0-255)
         img_array = np.array(self.current_image)
 
@@ -195,6 +204,120 @@ class ImageProcessor:
         # We invert because white should be thinner in a lithophane
         thickness_range = max_thickness_mm - min_thickness_mm
         self.height_map = min_thickness_mm + ((1.0 - normalized) * thickness_range)
+
+    def _apply_border(self, width_pixels: int, intensity: float, texture: str):
+        """
+        Apply a decorative border to the grayscale image.
+
+        Args:
+            width_pixels: Border width in pixels
+            intensity: Border darkness (0=white/thin, 1=black/thick)
+            texture: Border texture type (solid, gradient, ribbed, dotted, wave, crosshatch)
+        """
+        if width_pixels <= 0:
+            return
+
+        img_array = np.array(self.current_image, dtype=np.float32)
+        h, w = img_array.shape
+
+        # Base border gray value (0=black, 255=white)
+        # intensity 0 = white (255), intensity 1 = black (0)
+        base_gray = 255 * (1.0 - intensity)
+
+        # Create border mask based on texture
+        if texture == "solid":
+            # Simple solid border
+            for y in range(h):
+                for x in range(w):
+                    dist = min(x, y, w - 1 - x, h - 1 - y)
+                    if dist < width_pixels:
+                        img_array[y, x] = base_gray
+
+        elif texture == "gradient":
+            # Gradient that fades from border intensity to image
+            for y in range(h):
+                for x in range(w):
+                    dist = min(x, y, w - 1 - x, h - 1 - y)
+                    if dist < width_pixels:
+                        # Fade factor: 0 at edge, 1 at inner border edge
+                        fade = dist / width_pixels
+                        img_array[y, x] = base_gray * (1 - fade) + img_array[y, x] * fade
+
+        elif texture == "ribbed":
+            # Vertical ribbed pattern
+            rib_spacing = max(3, width_pixels // 4)
+            for y in range(h):
+                for x in range(w):
+                    dist = min(x, y, w - 1 - x, h - 1 - y)
+                    if dist < width_pixels:
+                        # Create ribs based on position along border
+                        if y < width_pixels or y >= h - width_pixels:
+                            rib_pos = x % rib_spacing
+                        else:
+                            rib_pos = y % rib_spacing
+                        rib_factor = 0.5 + 0.5 * math.sin(rib_pos / rib_spacing * math.pi * 2)
+                        gray = base_gray * (0.7 + 0.3 * rib_factor)
+                        img_array[y, x] = gray
+
+        elif texture == "dotted":
+            # Perforated dot pattern
+            dot_spacing = max(4, width_pixels // 3)
+            dot_radius = max(1, dot_spacing // 3)
+            for y in range(h):
+                for x in range(w):
+                    dist = min(x, y, w - 1 - x, h - 1 - y)
+                    if dist < width_pixels:
+                        # Check if we're in a dot
+                        dx = x % dot_spacing - dot_spacing // 2
+                        dy = y % dot_spacing - dot_spacing // 2
+                        in_dot = (dx * dx + dy * dy) < (dot_radius * dot_radius)
+                        if in_dot:
+                            img_array[y, x] = 255  # White (thin) for dots
+                        else:
+                            img_array[y, x] = base_gray
+
+        elif texture == "wave":
+            # Sine wave pattern along border
+            wave_freq = 2 * math.pi / max(10, width_pixels * 2)
+            wave_amp = width_pixels * 0.3
+            for y in range(h):
+                for x in range(w):
+                    dist = min(x, y, w - 1 - x, h - 1 - y)
+                    if dist < width_pixels:
+                        # Determine which edge we're on and position along it
+                        if y < width_pixels:
+                            pos = x
+                        elif y >= h - width_pixels:
+                            pos = x
+                        elif x < width_pixels:
+                            pos = y
+                        else:
+                            pos = y
+                        wave = math.sin(pos * wave_freq) * wave_amp
+                        effective_dist = dist + wave
+                        if effective_dist < width_pixels * 0.7:
+                            img_array[y, x] = base_gray
+                        elif effective_dist < width_pixels:
+                            fade = (effective_dist - width_pixels * 0.7) / (width_pixels * 0.3)
+                            img_array[y, x] = base_gray * (1 - fade) + img_array[y, x] * fade
+
+        elif texture == "crosshatch":
+            # Crosshatch diagonal pattern
+            line_spacing = max(3, width_pixels // 3)
+            for y in range(h):
+                for x in range(w):
+                    dist = min(x, y, w - 1 - x, h - 1 - y)
+                    if dist < width_pixels:
+                        # Diagonal lines in both directions
+                        diag1 = (x + y) % line_spacing < 2
+                        diag2 = (x - y) % line_spacing < 2
+                        if diag1 or diag2:
+                            img_array[y, x] = base_gray * 0.7
+                        else:
+                            img_array[y, x] = base_gray
+
+        # Convert back to PIL Image
+        self.current_image = Image.fromarray(img_array.astype(np.uint8), mode='L')
 
     def get_current_image(self) -> Optional[Image.Image]:
         """Get the current processed image"""
