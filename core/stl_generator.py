@@ -325,11 +325,22 @@ class STLGenerator:
         # Remove duplicate/overlapping faces that share the same vertices
         stl_mesh = self._remove_duplicate_faces(stl_mesh)
 
-        # Scale Z to match original height (so laid-flat footprint matches spec)
-        # After rotation, the standing height (Z) should equal the original Y span
-        current_height = stl_mesh.vectors[:, :, 2].max()
-        if current_height > 0:
-            scale_factor = original_height / current_height
+        # Scale Z so that the LAID-FLAT bounding box matches target height.
+        # When laid flat, the axis-aligned bounding box is larger than the standing Z
+        # due to the angled geometry. The extra comes from:
+        # 1. flat_depth creating a shelf at the base
+        # 2. The tilted front face extending the bounding box
+        # Empirically: overhang ≈ flat_depth / sin(angle) + thickness * cos(angle) / sin(angle)
+        # Simplified: we compute the actual bounding box expansion and compensate.
+        current_z_max = stl_mesh.vectors[:, :, 2].max()
+        current_y_extent = stl_mesh.vectors[:, :, 1].max() - stl_mesh.vectors[:, :, 1].min()
+        if current_z_max > 0:
+            # The laid-flat Y extent includes standing Z plus Y contribution from angle
+            # Y_flat ≈ Z_standing + |Y_min_standing| where Y_min comes from clamping offset
+            y_min_abs = abs(stl_mesh.vectors[:, :, 1].min())
+            estimated_flat_y = current_z_max + y_min_abs
+            target_z = original_height * (current_z_max / estimated_flat_y)
+            scale_factor = target_z / current_z_max
             stl_mesh.vectors[:, :, 2] *= scale_factor
 
         return stl_mesh
