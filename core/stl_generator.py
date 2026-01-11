@@ -49,7 +49,7 @@ class STLGenerator:
 
         # Apply rotation around X-axis if angle is not 0
         if angle != 0 and angle != 90:
-            stl_mesh = self._apply_angled_rotation(stl_mesh, angle)
+            stl_mesh = self._apply_angled_rotation(stl_mesh, angle, pixel_size_mm)
         elif angle == 90:
             stl_mesh = self._apply_vertical_rotation(stl_mesh)
 
@@ -124,51 +124,23 @@ class STLGenerator:
         return stl_mesh
 
     def _create_grid_mesh(self, vertices_top: np.ndarray, rows: int, cols: int, pixel_size_mm: float) -> mesh.Mesh:
-        """Create mesh with simplified back face but grid-based sides (for angled builds)
+        """Create mesh with grid-based bottom for proper vertex alignment after rotation.
 
-        Uses perimeter fan triangulation for back face:
-        - Full grid: (rows-1)*(cols-1)*2 ≈ 79k triangles for 200x200
-        - Perimeter fan: 2*(rows-1) + 2*(cols-1) ≈ 800 triangles for 200x200
+        For angled builds, we need full grid on both top and bottom to ensure
+        vertices align properly after rotation and Y-compensation clamping.
+        The simplification happens after transformation via degenerate triangle removal.
         """
         max_x = (cols - 1) * pixel_size_mm
         max_y = (rows - 1) * pixel_size_mm
 
-        # Bottom perimeter vertices only (not full grid)
-        # We need these for side wall connections
+        # Create full grid of bottom vertices (matching top grid)
+        # This ensures vertices align after rotation/clamping
         vertices_bottom = []
-        bottom_idx_map = {}  # maps (i,j) to vertex index in vertices_bottom
-
-        # Front edge (i=0)
-        for j in range(cols):
-            x = j * pixel_size_mm
-            y = max_y
-            bottom_idx_map[(0, j)] = len(vertices_bottom)
-            vertices_bottom.append([x, y, 0])
-
-        # Back edge (i=rows-1)
-        for j in range(cols):
-            x = j * pixel_size_mm
-            y = 0
-            bottom_idx_map[(rows - 1, j)] = len(vertices_bottom)
-            vertices_bottom.append([x, y, 0])
-
-        # Left edge (j=0), excluding corners already added
-        for i in range(1, rows - 1):
-            x = 0
-            y = (rows - 1 - i) * pixel_size_mm
-            bottom_idx_map[(i, 0)] = len(vertices_bottom)
-            vertices_bottom.append([x, y, 0])
-
-        # Right edge (j=cols-1), excluding corners already added
-        for i in range(1, rows - 1):
-            x = max_x
-            y = (rows - 1 - i) * pixel_size_mm
-            bottom_idx_map[(i, cols - 1)] = len(vertices_bottom)
-            vertices_bottom.append([x, y, 0])
-
-        # Add center vertex for fan triangulation
-        center_idx = len(vertices_bottom)
-        vertices_bottom.append([max_x / 2, max_y / 2, 0])
+        for i in range(rows):
+            for j in range(cols):
+                x = j * pixel_size_mm
+                y = (rows - 1 - i) * pixel_size_mm
+                vertices_bottom.append([x, y, 0])
 
         vertices_bottom = np.array(vertices_bottom)
         offset = rows * cols  # bottom vertices start after top vertices
@@ -182,43 +154,21 @@ class STLGenerator:
                 faces.append([idx, idx + cols, idx + 1])
                 faces.append([idx + 1, idx + cols, idx + cols + 1])
 
-        # Bottom surface - fan from center to perimeter
-        # Winding for -Z normal: center -> v1 -> v2 (CCW when viewed from below)
-        center = offset + center_idx
-
-        # Front edge (high Y)
-        for j in range(cols - 1):
-            v1 = offset + bottom_idx_map[(0, j)]
-            v2 = offset + bottom_idx_map[(0, j + 1)]
-            faces.append([center, v2, v1])  # reversed for -Z normal
-
-        # Right edge
+        # Bottom surface faces (full grid, will be simplified after transformation)
         for i in range(rows - 1):
-            i1, i2 = i, i + 1
-            v1 = offset + bottom_idx_map[(i1, cols - 1)]
-            v2 = offset + bottom_idx_map[(i2, cols - 1)]
-            faces.append([center, v2, v1])
+            for j in range(cols - 1):
+                idx = offset + i * cols + j
+                # Reversed winding for bottom face (-Z normal)
+                faces.append([idx, idx + 1, idx + cols])
+                faces.append([idx + 1, idx + cols + 1, idx + cols])
 
-        # Back edge (low Y)
-        for j in range(cols - 1, 0, -1):
-            v1 = offset + bottom_idx_map[(rows - 1, j)]
-            v2 = offset + bottom_idx_map[(rows - 1, j - 1)]
-            faces.append([center, v2, v1])
-
-        # Left edge
-        for i in range(rows - 1, 0, -1):
-            i1, i2 = i, i - 1
-            v1 = offset + bottom_idx_map[(i1, 0)]
-            v2 = offset + bottom_idx_map[(i2, 0)]
-            faces.append([center, v2, v1])
-
-        # Side faces - connecting top edge to bottom perimeter
+        # Side faces - connecting top edge to bottom edge
         # Left edge (j=0)
         for i in range(rows - 1):
             top1 = i * cols
             top2 = (i + 1) * cols
-            bot1 = offset + bottom_idx_map[(i, 0)]
-            bot2 = offset + bottom_idx_map[(i + 1, 0)]
+            bot1 = offset + i * cols
+            bot2 = offset + (i + 1) * cols
             faces.append([top1, bot1, top2])
             faces.append([top2, bot1, bot2])
 
@@ -226,8 +176,8 @@ class STLGenerator:
         for i in range(rows - 1):
             top1 = i * cols + (cols - 1)
             top2 = (i + 1) * cols + (cols - 1)
-            bot1 = offset + bottom_idx_map[(i, cols - 1)]
-            bot2 = offset + bottom_idx_map[(i + 1, cols - 1)]
+            bot1 = offset + i * cols + (cols - 1)
+            bot2 = offset + (i + 1) * cols + (cols - 1)
             faces.append([top1, top2, bot1])
             faces.append([top2, bot2, bot1])
 
@@ -235,8 +185,8 @@ class STLGenerator:
         for j in range(cols - 1):
             top1 = j
             top2 = j + 1
-            bot1 = offset + bottom_idx_map[(0, j)]
-            bot2 = offset + bottom_idx_map[(0, j + 1)]
+            bot1 = offset + j
+            bot2 = offset + j + 1
             faces.append([top1, top2, bot1])
             faces.append([top2, bot2, bot1])
 
@@ -244,8 +194,8 @@ class STLGenerator:
         for j in range(cols - 1):
             top1 = (rows - 1) * cols + j
             top2 = (rows - 1) * cols + j + 1
-            bot1 = offset + bottom_idx_map[(rows - 1, j)]
-            bot2 = offset + bottom_idx_map[(rows - 1, j + 1)]
+            bot1 = offset + (rows - 1) * cols + j
+            bot2 = offset + (rows - 1) * cols + j + 1
             faces.append([top1, bot1, top2])
             faces.append([top2, bot1, bot2])
 
@@ -259,7 +209,7 @@ class STLGenerator:
 
         return stl_mesh
 
-    def _apply_angled_rotation(self, stl_mesh: mesh.Mesh, angle: float) -> mesh.Mesh:
+    def _apply_angled_rotation(self, stl_mesh: mesh.Mesh, angle: float, pixel_size_mm: float) -> mesh.Mesh:
         """Apply rotation and clamping for angled builds (0 < angle < 90)"""
         # Avoid exactly 45° which causes numeric precision issues
         # (sin(45°) = cos(45°) creates vertex coincidences)
@@ -310,6 +260,13 @@ class STLGenerator:
         # that create non-manifold edges (especially at angles like 45°)
         precision = 1e-6
         stl_mesh.vectors = np.round(stl_mesh.vectors / precision) * precision
+
+        # Merge vertices that are very close together at z=0.
+        # After Y-compensation, vertices at the same grid position but different
+        # original heights end up at slightly different Y positions. This creates
+        # non-manifold edges where side walls meet the back face.
+        # Solution: snap z=0 vertices to grid based on their X position.
+        stl_mesh = self._merge_z0_vertices(stl_mesh, pixel_size_mm)
 
         # Remove degenerate triangles created by clamping
         stl_mesh = self._remove_degenerate_triangles(stl_mesh)
@@ -362,6 +319,65 @@ class STLGenerator:
             new_mesh.vectors[new_idx] = stl_mesh.vectors[old_idx]
 
         return new_mesh
+
+    def _merge_z0_vertices(self, stl_mesh: mesh.Mesh, pixel_size_mm: float) -> mesh.Mesh:
+        """Merge vertices at z=0 that should be at the same position.
+
+        After Y-compensation, vertices at the same grid position but different
+        original heights end up at slightly different Y positions. This merges
+        them by grouping by X coordinate and using a consistent Y for each group.
+        """
+        z_tolerance = 1e-5
+
+        # Build a map of X -> list of (triangle_idx, vertex_idx, y_value) for z=0 vertices
+        x_groups = {}
+        for i, triangle in enumerate(stl_mesh.vectors):
+            for j, vertex in enumerate(triangle):
+                if abs(vertex[2]) < z_tolerance:
+                    # Snap X to pixel grid to group vertices
+                    x_key = round(vertex[0] / pixel_size_mm) * pixel_size_mm
+                    x_key = round(x_key, 6)  # Avoid float precision issues in key
+                    if x_key not in x_groups:
+                        x_groups[x_key] = []
+                    x_groups[x_key].append((i, j, vertex[1]))
+
+        # For each X group, find clusters of Y values and merge them
+        # Vertices with Y values within merge_tolerance should be merged
+        merge_tolerance = pixel_size_mm * 0.5  # Half a pixel
+
+        for x_key, vertices in x_groups.items():
+            if len(vertices) <= 1:
+                continue
+
+            # Sort by Y value
+            y_values = sorted(set(round(v[2], 6) for v in vertices))
+
+            # Group Y values that are close together
+            y_clusters = []
+            current_cluster = [y_values[0]]
+            for y in y_values[1:]:
+                if y - current_cluster[-1] < merge_tolerance:
+                    current_cluster.append(y)
+                else:
+                    y_clusters.append(current_cluster)
+                    current_cluster = [y]
+            y_clusters.append(current_cluster)
+
+            # Create mapping from original Y to canonical Y (mean of cluster)
+            y_map = {}
+            for cluster in y_clusters:
+                canonical_y = sum(cluster) / len(cluster)
+                canonical_y = round(canonical_y, 6)
+                for y in cluster:
+                    y_map[y] = canonical_y
+
+            # Apply the mapping
+            for tri_idx, vert_idx, orig_y in vertices:
+                rounded_y = round(orig_y, 6)
+                if rounded_y in y_map:
+                    stl_mesh.vectors[tri_idx][vert_idx][1] = y_map[rounded_y]
+
+        return stl_mesh
 
     def _merge_close_vertices(self, stl_mesh: mesh.Mesh, tolerance: float = 1e-6) -> mesh.Mesh:
         """Merge vertices that are very close together to avoid numeric precision issues"""
