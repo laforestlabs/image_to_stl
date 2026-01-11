@@ -107,9 +107,11 @@ class ImageProcessor:
         # Default 2 pixels/mm gives good quality without excessive triangles
         # (100x100mm = 200x200 pixels = ~160k triangles, reasonable for preview)
         pixels_per_mm = params.get("pixels_per_mm", 2.0)
-        self.pixel_size_mm = 1.0 / pixels_per_mm  # Store for STL generation
         target_width_pixels = int(width_mm * pixels_per_mm)
         target_height_pixels = int(height_mm * pixels_per_mm)
+        # pixel_size_mm is the spacing between vertices (fence-post problem)
+        # N pixels = N-1 gaps, so to span width_mm we need width_mm/(N-1) per gap
+        self.pixel_size_mm = width_mm / (target_width_pixels - 1)
 
         # Calculate aspect ratios
         target_aspect = width_mm / height_mm
