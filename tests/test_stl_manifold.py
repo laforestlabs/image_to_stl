@@ -1,6 +1,7 @@
 """
 Tests to verify STL meshes are manifold (watertight)
 """
+import random
 import sys
 import tempfile
 from pathlib import Path
@@ -11,21 +12,43 @@ import trimesh
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+
+def get_random_sample_image() -> Path:
+    """Get a random image from the samples directory"""
+    samples_dir = Path(__file__).parent.parent / "samples"
+    images = list(samples_dir.rglob("*.jpg"))
+    if not images:
+        return None
+    return random.choice(images)
+
 from core.image_processor import ImageProcessor
+from core.process import Process
 from core.stl_generator import STLGenerator
 
 
 def generate_stl_from_image(image_path: str, angle: float = 0.0) -> trimesh.Trimesh:
     """Helper to generate STL from an image and load it as trimesh"""
+    process = Process.from_dict({
+        'name': 'Test',
+        'operations': [{
+            'type': 'set_lithophane_parameters',
+            'parameters': {
+                'width_mm': 50.0,
+                'height_mm': 50.0,
+                'min_thickness_mm': 0.4,
+                'max_thickness_mm': 2.0,
+                'angle': angle
+            }
+        }]
+    })
+
     processor = ImageProcessor()
-    processor.load_image(image_path)
-    processor.update_parameters(width_mm=50, height_mm=50, min_thickness_mm=0.4, max_thickness_mm=2.0)
-    result = processor.process()
+    processor.execute_process(image_path, process)
 
     generator = STLGenerator()
     stl_mesh = generator.generate_from_heightmap(
-        result['height_map'],
-        pixel_size_mm=result['pixel_size_mm'],
+        processor.get_height_map(),
+        pixel_size_mm=processor.get_pixel_size_mm(),
         angle=angle
     )
 
@@ -108,22 +131,22 @@ class TestSTLManifold:
         assert mesh.is_watertight, f"Mesh at 90° is not watertight."
 
     def test_real_image_is_manifold(self):
-        """Test with the actual test image"""
-        test_image = Path(__file__).parent.parent / "test_image.png"
-        if not test_image.exists():
-            pytest.skip("test_image.png not found")
+        """Test with a random sample image"""
+        test_image = get_random_sample_image()
+        if not test_image:
+            pytest.skip("No sample images found")
 
         mesh = generate_stl_from_image(str(test_image), angle=0.0)
-        assert mesh.is_watertight, f"Mesh from test_image.png is not watertight."
+        assert mesh.is_watertight, f"Mesh from {test_image.name} is not watertight."
 
     def test_real_image_angled_is_manifold(self):
-        """Test with the actual test image at an angle"""
-        test_image = Path(__file__).parent.parent / "test_image.png"
-        if not test_image.exists():
-            pytest.skip("test_image.png not found")
+        """Test with a random sample image at an angle"""
+        test_image = get_random_sample_image()
+        if not test_image:
+            pytest.skip("No sample images found")
 
         mesh = generate_stl_from_image(str(test_image), angle=75.0)
-        assert mesh.is_watertight, f"Mesh from test_image.png at 75° is not watertight."
+        assert mesh.is_watertight, f"Mesh from {test_image.name} at 75° is not watertight."
 
 
 class TestMeshTriangleCount:
