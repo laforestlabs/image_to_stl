@@ -101,7 +101,7 @@ class ImageProcessor:
         self.angle = params.get("angle", 75.0)  # Store angle for STL generation
         crop_mode = params.get("crop_mode", "crop_to_size")
         background_tint = params.get("background_tint", 0.0)  # 0-100%
-        blur = params.get("blur", 0.0)  # Blur radius
+        blur_mm = params.get("blur_mm", 0.0)  # Blur radius in mm
 
         # Calculate pixel density to achieve desired physical dimensions
         # Default 2 pixels/mm gives good quality without excessive triangles
@@ -180,9 +180,10 @@ class ImageProcessor:
         if invert:
             self.current_image = ImageOps.invert(self.current_image)
 
-        # Apply blur if specified
-        if blur > 0:
-            self.current_image = self.current_image.filter(ImageFilter.GaussianBlur(radius=blur))
+        # Apply blur if specified (convert mm to pixels)
+        if blur_mm > 0:
+            blur_pixels = blur_mm * pixels_per_mm
+            self.current_image = self.current_image.filter(ImageFilter.GaussianBlur(radius=blur_pixels))
 
         # Apply border if specified
         border_width_mm = params.get("border_width_mm", 0.0)

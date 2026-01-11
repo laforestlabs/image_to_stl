@@ -35,143 +35,381 @@ class STLGenerator:
                 z = height_map[i, j]
                 vertices_top.append([x, y, z])
 
-        # Create vertices for the bottom surface
-        vertices_bottom = []
-        for i in range(rows):
-            for j in range(cols):
-                x = j * pixel_size_mm
-                y = (rows - 1 - i) * pixel_size_mm
-                z = 0  # Bottom is at z=0
-                vertices_bottom.append([x, y, z])
-
         vertices_top = np.array(vertices_top)
-        vertices_bottom = np.array(vertices_bottom)
 
-        # Generate faces
-        faces = []
+        # Choose mesh strategy based on angle
+        # angle=0: simplified bottom (4 corners) - saves ~50% triangles
+        # angle!=0: grid-based bottom - handles vertex clamping correctly
+        use_simplified_bottom = (angle == 0)
 
-        # Top surface faces
-        for i in range(rows - 1):
-            for j in range(cols - 1):
-                # Each quad becomes 2 triangles
-                idx = i * cols + j
-
-                # Triangle 1
-                faces.append([idx, idx + cols, idx + 1])
-                # Triangle 2
-                faces.append([idx + 1, idx + cols, idx + cols + 1])
-
-        # Bottom surface faces (reversed winding for correct normals)
-        offset = rows * cols
-        for i in range(rows - 1):
-            for j in range(cols - 1):
-                idx = offset + i * cols + j
-
-                # Triangle 1
-                faces.append([idx, idx + 1, idx + cols])
-                # Triangle 2
-                faces.append([idx + 1, idx + cols + 1, idx + cols])
-
-        # Side faces (walls)
-        # Left edge
-        for i in range(rows - 1):
-            top1 = i * cols
-            top2 = (i + 1) * cols
-            bot1 = offset + i * cols
-            bot2 = offset + (i + 1) * cols
-            faces.append([top1, bot1, top2])
-            faces.append([top2, bot1, bot2])
-
-        # Right edge
-        for i in range(rows - 1):
-            top1 = i * cols + (cols - 1)
-            top2 = (i + 1) * cols + (cols - 1)
-            bot1 = offset + i * cols + (cols - 1)
-            bot2 = offset + (i + 1) * cols + (cols - 1)
-            faces.append([top1, top2, bot1])
-            faces.append([top2, bot2, bot1])
-
-        # Front edge
-        for j in range(cols - 1):
-            top1 = j
-            top2 = j + 1
-            bot1 = offset + j
-            bot2 = offset + j + 1
-            faces.append([top1, top2, bot1])
-            faces.append([top2, bot2, bot1])
-
-        # Back edge
-        for j in range(cols - 1):
-            top1 = (rows - 1) * cols + j
-            top2 = (rows - 1) * cols + j + 1
-            bot1 = offset + (rows - 1) * cols + j
-            bot2 = offset + (rows - 1) * cols + j + 1
-            faces.append([top1, bot1, top2])
-            faces.append([top2, bot1, bot2])
-
-        faces = np.array(faces)
-
-        # Combine top and bottom vertices
-        all_vertices = np.vstack([vertices_top, vertices_bottom])
-
-        # Create the mesh
-        stl_mesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
-        for i, face in enumerate(faces):
-            for j in range(3):
-                stl_mesh.vectors[i][j] = all_vertices[face[j]]
+        if use_simplified_bottom:
+            stl_mesh = self._create_simplified_mesh(vertices_top, rows, cols, pixel_size_mm)
+        else:
+            stl_mesh = self._create_grid_mesh(vertices_top, rows, cols, pixel_size_mm)
 
         # Apply rotation around X-axis if angle is not 0
         if angle != 0 and angle != 90:
-            angle_rad = np.radians(angle)
-            cos_a = np.cos(angle_rad)
-            sin_a = np.sin(angle_rad)
-
-            # Rotation matrix around X-axis
-            for i in range(len(stl_mesh.vectors)):
-                for j in range(3):
-                    y = stl_mesh.vectors[i][j][1]
-                    z = stl_mesh.vectors[i][j][2]
-                    stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
-                    stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
-
-            # For angles between 0 and 90, create a flat bottom
-            min_z = stl_mesh.vectors[:, :, 2].min()
-            max_z = stl_mesh.vectors[:, :, 2].max()
-            model_height = max_z - min_z
-
-            # Calculate how much to lower for good flat bottom contact
-            target_flat_width = 2.0  # mm
-            flat_depth = max(target_flat_width * np.sin(angle_rad), model_height * 0.01)
-
-            # Move mesh so that min_z + flat_depth = 0
-            stl_mesh.vectors[:, :, 2] -= (min_z + flat_depth)
-
-            # Simple vertex clamping approach - clamp all vertices below z=0 to z=0
-            # This creates a flat bottom by collapsing the bottom of the mesh to the z=0 plane
-            # The mesh remains manifold because we preserve all triangle connectivity
-            stl_mesh.vectors[:, :, 2] = np.maximum(stl_mesh.vectors[:, :, 2], 0.0)
-
+            stl_mesh = self._apply_angled_rotation(stl_mesh, angle)
         elif angle == 90:
-            # Vertical orientation - rotate but no clipping needed
-            angle_rad = np.radians(angle)
-            cos_a = np.cos(angle_rad)
-            sin_a = np.sin(angle_rad)
-
-            for i in range(len(stl_mesh.vectors)):
-                for j in range(3):
-                    y = stl_mesh.vectors[i][j][1]
-                    z = stl_mesh.vectors[i][j][2]
-                    stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
-                    stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
-
-            # Translate so bottom sits on build plate
-            min_z = stl_mesh.vectors[:, :, 2].min()
-            stl_mesh.vectors[:, :, 2] -= min_z
+            stl_mesh = self._apply_vertical_rotation(stl_mesh)
 
         # For angle == 0, no rotation needed, mesh already has flat bottom
 
         self.mesh = stl_mesh
         return stl_mesh
+
+    def _create_simplified_mesh(self, vertices_top: np.ndarray, rows: int, cols: int, pixel_size_mm: float) -> mesh.Mesh:
+        """Create mesh with simplified bottom (4 corners, 2 triangles) for angle=0"""
+        max_x = (cols - 1) * pixel_size_mm
+        max_y = (rows - 1) * pixel_size_mm
+        vertices_bottom = np.array([
+            [0, max_y, 0],      # TL - top-left (high Y, low X)
+            [max_x, max_y, 0],  # TR - top-right (high Y, high X)
+            [0, 0, 0],          # BL - bottom-left (low Y, low X)
+            [max_x, 0, 0],      # BR - bottom-right (low Y, high X)
+        ])
+
+        faces = []
+
+        # Top surface faces (full detail needed)
+        for i in range(rows - 1):
+            for j in range(cols - 1):
+                idx = i * cols + j
+                faces.append([idx, idx + cols, idx + 1])
+                faces.append([idx + 1, idx + cols, idx + cols + 1])
+
+        # Bottom corner indices
+        offset = rows * cols
+        TL, TR, BL, BR = offset, offset + 1, offset + 2, offset + 3
+
+        # Bottom surface - just 2 triangles
+        faces.append([BL, TL, BR])
+        faces.append([TL, TR, BR])
+
+        # Side faces as triangle fans from bottom corners to top edge vertices
+        # Left wall: fan from BL
+        for i in range(rows - 1):
+            top_curr = (rows - 1 - i) * cols
+            top_next = (rows - 2 - i) * cols
+            faces.append([BL, top_curr, top_next])
+        faces.append([BL, 0, TL])
+
+        # Right wall: fan from BR
+        faces.append([BR, TR, cols - 1])
+        for i in range(rows - 1):
+            top_curr = i * cols + (cols - 1)
+            top_next = (i + 1) * cols + (cols - 1)
+            faces.append([BR, top_curr, top_next])
+
+        # Front wall: fan from TL
+        for j in range(cols - 1):
+            faces.append([TL, j, j + 1])
+        faces.append([TL, cols - 1, TR])
+
+        # Back wall: fan from BR
+        for j in range(cols - 1):
+            top_curr = (rows - 1) * cols + (cols - 1 - j)
+            top_next = (rows - 1) * cols + (cols - 2 - j)
+            faces.append([BR, top_curr, top_next])
+        faces.append([BR, (rows - 1) * cols, BL])
+
+        faces = np.array(faces)
+        all_vertices = np.vstack([vertices_top, vertices_bottom])
+
+        stl_mesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
+        for i, face in enumerate(faces):
+            for j in range(3):
+                stl_mesh.vectors[i][j] = all_vertices[face[j]]
+
+        return stl_mesh
+
+    def _create_grid_mesh(self, vertices_top: np.ndarray, rows: int, cols: int, pixel_size_mm: float) -> mesh.Mesh:
+        """Create mesh with simplified back face but grid-based sides (for angled builds)
+
+        Uses perimeter fan triangulation for back face:
+        - Full grid: (rows-1)*(cols-1)*2 ≈ 79k triangles for 200x200
+        - Perimeter fan: 2*(rows-1) + 2*(cols-1) ≈ 800 triangles for 200x200
+        """
+        max_x = (cols - 1) * pixel_size_mm
+        max_y = (rows - 1) * pixel_size_mm
+
+        # Bottom perimeter vertices only (not full grid)
+        # We need these for side wall connections
+        vertices_bottom = []
+        bottom_idx_map = {}  # maps (i,j) to vertex index in vertices_bottom
+
+        # Front edge (i=0)
+        for j in range(cols):
+            x = j * pixel_size_mm
+            y = max_y
+            bottom_idx_map[(0, j)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Back edge (i=rows-1)
+        for j in range(cols):
+            x = j * pixel_size_mm
+            y = 0
+            bottom_idx_map[(rows - 1, j)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Left edge (j=0), excluding corners already added
+        for i in range(1, rows - 1):
+            x = 0
+            y = (rows - 1 - i) * pixel_size_mm
+            bottom_idx_map[(i, 0)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Right edge (j=cols-1), excluding corners already added
+        for i in range(1, rows - 1):
+            x = max_x
+            y = (rows - 1 - i) * pixel_size_mm
+            bottom_idx_map[(i, cols - 1)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Add center vertex for fan triangulation
+        center_idx = len(vertices_bottom)
+        vertices_bottom.append([max_x / 2, max_y / 2, 0])
+
+        vertices_bottom = np.array(vertices_bottom)
+        offset = rows * cols  # bottom vertices start after top vertices
+
+        faces = []
+
+        # Top surface faces (full detail needed)
+        for i in range(rows - 1):
+            for j in range(cols - 1):
+                idx = i * cols + j
+                faces.append([idx, idx + cols, idx + 1])
+                faces.append([idx + 1, idx + cols, idx + cols + 1])
+
+        # Bottom surface - fan from center to perimeter
+        # Winding for -Z normal: center -> v1 -> v2 (CCW when viewed from below)
+        center = offset + center_idx
+
+        # Front edge (high Y)
+        for j in range(cols - 1):
+            v1 = offset + bottom_idx_map[(0, j)]
+            v2 = offset + bottom_idx_map[(0, j + 1)]
+            faces.append([center, v2, v1])  # reversed for -Z normal
+
+        # Right edge
+        for i in range(rows - 1):
+            i1, i2 = i, i + 1
+            v1 = offset + bottom_idx_map[(i1, cols - 1)]
+            v2 = offset + bottom_idx_map[(i2, cols - 1)]
+            faces.append([center, v2, v1])
+
+        # Back edge (low Y)
+        for j in range(cols - 1, 0, -1):
+            v1 = offset + bottom_idx_map[(rows - 1, j)]
+            v2 = offset + bottom_idx_map[(rows - 1, j - 1)]
+            faces.append([center, v2, v1])
+
+        # Left edge
+        for i in range(rows - 1, 0, -1):
+            i1, i2 = i, i - 1
+            v1 = offset + bottom_idx_map[(i1, 0)]
+            v2 = offset + bottom_idx_map[(i2, 0)]
+            faces.append([center, v2, v1])
+
+        # Side faces - connecting top edge to bottom perimeter
+        # Left edge (j=0)
+        for i in range(rows - 1):
+            top1 = i * cols
+            top2 = (i + 1) * cols
+            bot1 = offset + bottom_idx_map[(i, 0)]
+            bot2 = offset + bottom_idx_map[(i + 1, 0)]
+            faces.append([top1, bot1, top2])
+            faces.append([top2, bot1, bot2])
+
+        # Right edge (j=cols-1)
+        for i in range(rows - 1):
+            top1 = i * cols + (cols - 1)
+            top2 = (i + 1) * cols + (cols - 1)
+            bot1 = offset + bottom_idx_map[(i, cols - 1)]
+            bot2 = offset + bottom_idx_map[(i + 1, cols - 1)]
+            faces.append([top1, top2, bot1])
+            faces.append([top2, bot2, bot1])
+
+        # Front edge (i=0)
+        for j in range(cols - 1):
+            top1 = j
+            top2 = j + 1
+            bot1 = offset + bottom_idx_map[(0, j)]
+            bot2 = offset + bottom_idx_map[(0, j + 1)]
+            faces.append([top1, top2, bot1])
+            faces.append([top2, bot2, bot1])
+
+        # Back edge (i=rows-1)
+        for j in range(cols - 1):
+            top1 = (rows - 1) * cols + j
+            top2 = (rows - 1) * cols + j + 1
+            bot1 = offset + bottom_idx_map[(rows - 1, j)]
+            bot2 = offset + bottom_idx_map[(rows - 1, j + 1)]
+            faces.append([top1, bot1, top2])
+            faces.append([top2, bot1, bot2])
+
+        faces = np.array(faces)
+        all_vertices = np.vstack([vertices_top, vertices_bottom])
+
+        stl_mesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
+        for i, face in enumerate(faces):
+            for j in range(3):
+                stl_mesh.vectors[i][j] = all_vertices[face[j]]
+
+        return stl_mesh
+
+    def _apply_angled_rotation(self, stl_mesh: mesh.Mesh, angle: float) -> mesh.Mesh:
+        """Apply rotation and clamping for angled builds (0 < angle < 90)"""
+        # Avoid exactly 45° which causes numeric precision issues
+        # (sin(45°) = cos(45°) creates vertex coincidences)
+        if abs(angle - 45.0) < 0.1:
+            angle = 45.1
+
+        angle_rad = np.radians(angle)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+
+        # Rotation matrix around X-axis
+        for i in range(len(stl_mesh.vectors)):
+            for j in range(3):
+                y = stl_mesh.vectors[i][j][1]
+                z = stl_mesh.vectors[i][j][2]
+                stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
+                stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
+
+        # Create a flat bottom
+        min_z = stl_mesh.vectors[:, :, 2].min()
+        max_z = stl_mesh.vectors[:, :, 2].max()
+        model_height = max_z - min_z
+
+        # Calculate how much to lower for good flat bottom contact
+        target_flat_width = 2.0  # mm
+        flat_depth = max(target_flat_width * np.sin(angle_rad), model_height * 0.01)
+
+        # Move mesh so that min_z + flat_depth = 0
+        stl_mesh.vectors[:, :, 2] -= (min_z + flat_depth)
+
+        # Clamp vertices below z=0 to z=0, compensating y for the rotation angle
+        # When clamping z, we need to slide along the tilted plane direction,
+        # not just move straight up in Z. This keeps tilted faces planar.
+        # For a vertex at z < 0, project onto z=0 along the rotated plane:
+        #   y_new = y_old - z_old * cot(angle) = y_old - z_old * cos/sin
+        cot_a = cos_a / sin_a
+        below_zero = stl_mesh.vectors[:, :, 2] < 0
+        # Adjust y based on how far below z=0 the vertex is
+        stl_mesh.vectors[:, :, 1] = np.where(
+            below_zero,
+            stl_mesh.vectors[:, :, 1] - stl_mesh.vectors[:, :, 2] * cot_a,
+            stl_mesh.vectors[:, :, 1]
+        )
+        # Then clamp z to 0
+        stl_mesh.vectors[:, :, 2] = np.maximum(stl_mesh.vectors[:, :, 2], 0.0)
+
+        # Round vertex positions to avoid floating-point precision issues
+        # that create non-manifold edges (especially at angles like 45°)
+        precision = 1e-6
+        stl_mesh.vectors = np.round(stl_mesh.vectors / precision) * precision
+
+        # Remove degenerate triangles created by clamping
+        stl_mesh = self._remove_degenerate_triangles(stl_mesh)
+
+        # Remove duplicate/overlapping faces that share the same vertices
+        stl_mesh = self._remove_duplicate_faces(stl_mesh)
+
+        return stl_mesh
+
+    def _apply_vertical_rotation(self, stl_mesh: mesh.Mesh) -> mesh.Mesh:
+        """Apply 90 degree rotation for vertical builds"""
+        angle_rad = np.radians(90)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+
+        for i in range(len(stl_mesh.vectors)):
+            for j in range(3):
+                y = stl_mesh.vectors[i][j][1]
+                z = stl_mesh.vectors[i][j][2]
+                stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
+                stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
+
+        # Translate so bottom sits on build plate
+        min_z = stl_mesh.vectors[:, :, 2].min()
+        stl_mesh.vectors[:, :, 2] -= min_z
+
+        return stl_mesh
+
+    def _remove_duplicate_faces(self, stl_mesh: mesh.Mesh) -> mesh.Mesh:
+        """Remove duplicate faces that have the same vertices (regardless of order)"""
+        seen_faces = set()
+        valid_indices = []
+
+        for i, triangle in enumerate(stl_mesh.vectors):
+            # Create a canonical representation of the face
+            # Sort vertices to create order-independent key
+            verts = [tuple(np.round(v, 6)) for v in triangle]
+            face_key = tuple(sorted(verts))
+
+            if face_key not in seen_faces:
+                seen_faces.add(face_key)
+                valid_indices.append(i)
+
+        if len(valid_indices) == len(stl_mesh.vectors):
+            return stl_mesh  # No duplicates
+
+        # Create new mesh without duplicates
+        new_mesh = mesh.Mesh(np.zeros(len(valid_indices), dtype=mesh.Mesh.dtype))
+        for new_idx, old_idx in enumerate(valid_indices):
+            new_mesh.vectors[new_idx] = stl_mesh.vectors[old_idx]
+
+        return new_mesh
+
+    def _merge_close_vertices(self, stl_mesh: mesh.Mesh, tolerance: float = 1e-6) -> mesh.Mesh:
+        """Merge vertices that are very close together to avoid numeric precision issues"""
+        # Flatten all vertices from all triangles
+        all_vertices = stl_mesh.vectors.reshape(-1, 3)
+
+        # Find unique vertices with tolerance
+        unique_vertices = []
+        vertex_map = {}  # maps original vertex tuple to unique index
+
+        for v in all_vertices:
+            v_tuple = tuple(np.round(v / tolerance) * tolerance)
+            if v_tuple not in vertex_map:
+                vertex_map[v_tuple] = len(unique_vertices)
+                unique_vertices.append(v_tuple)
+
+        # Reconstruct mesh with merged vertices
+        for i, triangle in enumerate(stl_mesh.vectors):
+            for j, vertex in enumerate(triangle):
+                v_tuple = tuple(np.round(vertex / tolerance) * tolerance)
+                # Update vertex to the canonical position
+                stl_mesh.vectors[i][j] = np.array(v_tuple)
+
+        return stl_mesh
+
+    def _remove_degenerate_triangles(self, stl_mesh: mesh.Mesh) -> mesh.Mesh:
+        """Remove triangles where vertices have collapsed to the same position"""
+        tolerance = 1e-6
+        valid_indices = []
+
+        for i, triangle in enumerate(stl_mesh.vectors):
+            v0, v1, v2 = triangle
+            # Check if any two vertices are too close (degenerate)
+            d01 = np.linalg.norm(v1 - v0)
+            d12 = np.linalg.norm(v2 - v1)
+            d20 = np.linalg.norm(v0 - v2)
+            if d01 > tolerance and d12 > tolerance and d20 > tolerance:
+                valid_indices.append(i)
+
+        if len(valid_indices) == len(stl_mesh.vectors):
+            return stl_mesh  # No degenerate triangles
+
+        # Create new mesh with only valid triangles
+        new_mesh = mesh.Mesh(np.zeros(len(valid_indices), dtype=mesh.Mesh.dtype))
+        for new_idx, old_idx in enumerate(valid_indices):
+            new_mesh.vectors[new_idx] = stl_mesh.vectors[old_idx]
+
+        return new_mesh
 
     def save(self, filepath: str):
         """Save the mesh to an STL file"""

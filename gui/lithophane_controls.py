@@ -163,7 +163,7 @@ class LithophaneControls(QWidget):
         self.resolution_control.value_changed.connect(self._emit_changed)
         quality_layout.addWidget(self.resolution_control)
 
-        self.blur_control = SliderWithInput("Blur", 0, 10, 0, decimals=1)
+        self.blur_control = SliderWithInput("Blur (mm)", 0, 5, 0, decimals=1)
         self.blur_control.value_changed.connect(self._emit_changed)
         quality_layout.addWidget(self.blur_control)
 
@@ -269,7 +269,7 @@ class LithophaneControls(QWidget):
             "min_thickness_mm": self.min_thickness_control.value(),
             "max_thickness_mm": self.max_thickness_control.value(),
             "pixels_per_mm": self.resolution_control.value(),
-            "blur": self.blur_control.value(),
+            "blur_mm": self.blur_control.value(),
             "angle": self.angle_control.value(),
             "crop_mode": crop_mode,
             "background_tint": self.background_tint_control.value(),
@@ -293,8 +293,8 @@ class LithophaneControls(QWidget):
             self.max_thickness_control.setValue(params["max_thickness_mm"])
         if "pixels_per_mm" in params:
             self.resolution_control.setValue(params["pixels_per_mm"])
-        if "blur" in params:
-            self.blur_control.setValue(params["blur"])
+        if "blur_mm" in params:
+            self.blur_control.setValue(params["blur_mm"])
         if "angle" in params:
             self.angle_control.setValue(params["angle"])
         if "crop_mode" in params:

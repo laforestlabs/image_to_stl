@@ -23,7 +23,7 @@ class OperationDialog(QDialog):
                 "min_thickness_mm": {"type": "float", "default": 0.8, "label": "Min Thickness (mm) - saturated pixels"},
                 "max_thickness_mm": {"type": "float", "default": 5.0, "label": "Max Thickness (mm) - black pixels"},
                 "pixels_per_mm": {"type": "float", "default": 2.0, "label": "Resolution (pixels/mm)"},
-                "blur": {"type": "float", "default": 0.0, "label": "Blur"},
+                "blur_mm": {"type": "float", "default": 0.0, "label": "Blur (mm)"},
                 "angle": {"type": "float", "default": 75.0, "label": "Build Angle (degrees)"},
                 "invert": {"type": "bool", "default": False, "label": "Invert Colors"},
                 "crop_mode": {"type": "combo", "default": "crop_to_size", "label": "Crop Mode",

@@ -54,7 +54,7 @@ python main.py
 | **Min Thickness** | Thickness at brightest areas (typically 0.6-1.0mm) |
 | **Max Thickness** | Thickness at darkest areas (typically 3-5mm) |
 | **Resolution** | Pixels per mm (higher = more detail, larger file) |
-| **Blur** | Smoothing to reduce noise |
+| **Blur** | Smoothing radius in mm to reduce noise |
 | **Build Angle** | Angle for the back surface (for easier printing) |
 | **Crop Mode** | Crop to size or keep full image with padding |
 | **Invert** | Flip light/dark (for negative images) |
@@ -62,7 +62,7 @@ python main.py
 ### Tips for Good Lithophanes
 
 - **High contrast images** work best
-- **Portraits** benefit from slightly higher blur (1-2)
+- **Portraits** benefit from slightly higher blur (0.5-1mm)
 - Start with **2 pixels/mm** resolution, increase for fine detail
 - **0.8mm min / 4mm max thickness** is a good starting point
 - Print with **white or natural PLA** for best results
