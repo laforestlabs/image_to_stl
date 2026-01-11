@@ -264,6 +264,9 @@ class STLGenerator:
         if abs(angle - 45.0) < 0.1:
             angle = 45.1
 
+        # Record original Y span - this is the target height when laid flat
+        original_height = stl_mesh.vectors[:, :, 1].max() - stl_mesh.vectors[:, :, 1].min()
+
         angle_rad = np.radians(angle)
         cos_a = np.cos(angle_rad)
         sin_a = np.sin(angle_rad)
@@ -321,6 +324,13 @@ class STLGenerator:
 
         # Remove duplicate/overlapping faces that share the same vertices
         stl_mesh = self._remove_duplicate_faces(stl_mesh)
+
+        # Scale Z to match original height (so laid-flat footprint matches spec)
+        # After rotation, the standing height (Z) should equal the original Y span
+        current_height = stl_mesh.vectors[:, :, 2].max()
+        if current_height > 0:
+            scale_factor = original_height / current_height
+            stl_mesh.vectors[:, :, 2] *= scale_factor
 
         return stl_mesh
 
