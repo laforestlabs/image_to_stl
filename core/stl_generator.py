@@ -124,23 +124,52 @@ class STLGenerator:
         return stl_mesh
 
     def _create_grid_mesh(self, vertices_top: np.ndarray, rows: int, cols: int, pixel_size_mm: float) -> mesh.Mesh:
-        """Create mesh with grid-based bottom for proper vertex alignment after rotation.
+        """Create mesh with simplified back face using perimeter fan triangulation.
 
-        For angled builds, we need full grid on both top and bottom to ensure
-        vertices align properly after rotation and Y-compensation clamping.
-        The simplification happens after transformation via degenerate triangle removal.
+        Uses perimeter fan for back face:
+        - Full grid: (rows-1)*(cols-1)*2 ≈ 79k triangles for 200x200
+        - Perimeter fan: 2*(rows-1) + 2*(cols-1) ≈ 800 triangles for 200x200
+
+        The _merge_z0_vertices() function handles vertex alignment after rotation.
         """
         max_x = (cols - 1) * pixel_size_mm
         max_y = (rows - 1) * pixel_size_mm
 
-        # Create full grid of bottom vertices (matching top grid)
-        # This ensures vertices align after rotation/clamping
+        # Bottom perimeter vertices only (not full grid)
         vertices_bottom = []
-        for i in range(rows):
-            for j in range(cols):
-                x = j * pixel_size_mm
-                y = (rows - 1 - i) * pixel_size_mm
-                vertices_bottom.append([x, y, 0])
+        bottom_idx_map = {}  # maps (i,j) to vertex index in vertices_bottom
+
+        # Front edge (i=0)
+        for j in range(cols):
+            x = j * pixel_size_mm
+            y = max_y
+            bottom_idx_map[(0, j)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Back edge (i=rows-1)
+        for j in range(cols):
+            x = j * pixel_size_mm
+            y = 0
+            bottom_idx_map[(rows - 1, j)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Left edge (j=0), excluding corners already added
+        for i in range(1, rows - 1):
+            x = 0
+            y = (rows - 1 - i) * pixel_size_mm
+            bottom_idx_map[(i, 0)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Right edge (j=cols-1), excluding corners already added
+        for i in range(1, rows - 1):
+            x = max_x
+            y = (rows - 1 - i) * pixel_size_mm
+            bottom_idx_map[(i, cols - 1)] = len(vertices_bottom)
+            vertices_bottom.append([x, y, 0])
+
+        # Add center vertex for fan triangulation
+        center_idx = len(vertices_bottom)
+        vertices_bottom.append([max_x / 2, max_y / 2, 0])
 
         vertices_bottom = np.array(vertices_bottom)
         offset = rows * cols  # bottom vertices start after top vertices
@@ -154,21 +183,40 @@ class STLGenerator:
                 faces.append([idx, idx + cols, idx + 1])
                 faces.append([idx + 1, idx + cols, idx + cols + 1])
 
-        # Bottom surface faces (full grid, will be simplified after transformation)
-        for i in range(rows - 1):
-            for j in range(cols - 1):
-                idx = offset + i * cols + j
-                # Reversed winding for bottom face (-Z normal)
-                faces.append([idx, idx + 1, idx + cols])
-                faces.append([idx + 1, idx + cols + 1, idx + cols])
+        # Bottom surface - fan from center to perimeter
+        center = offset + center_idx
 
-        # Side faces - connecting top edge to bottom edge
+        # Front edge (high Y)
+        for j in range(cols - 1):
+            v1 = offset + bottom_idx_map[(0, j)]
+            v2 = offset + bottom_idx_map[(0, j + 1)]
+            faces.append([center, v2, v1])
+
+        # Right edge
+        for i in range(rows - 1):
+            v1 = offset + bottom_idx_map[(i, cols - 1)]
+            v2 = offset + bottom_idx_map[(i + 1, cols - 1)]
+            faces.append([center, v2, v1])
+
+        # Back edge (low Y)
+        for j in range(cols - 1, 0, -1):
+            v1 = offset + bottom_idx_map[(rows - 1, j)]
+            v2 = offset + bottom_idx_map[(rows - 1, j - 1)]
+            faces.append([center, v2, v1])
+
+        # Left edge
+        for i in range(rows - 1, 0, -1):
+            v1 = offset + bottom_idx_map[(i, 0)]
+            v2 = offset + bottom_idx_map[(i - 1, 0)]
+            faces.append([center, v2, v1])
+
+        # Side faces - connecting top edge to bottom perimeter
         # Left edge (j=0)
         for i in range(rows - 1):
             top1 = i * cols
             top2 = (i + 1) * cols
-            bot1 = offset + i * cols
-            bot2 = offset + (i + 1) * cols
+            bot1 = offset + bottom_idx_map[(i, 0)]
+            bot2 = offset + bottom_idx_map[(i + 1, 0)]
             faces.append([top1, bot1, top2])
             faces.append([top2, bot1, bot2])
 
@@ -176,8 +224,8 @@ class STLGenerator:
         for i in range(rows - 1):
             top1 = i * cols + (cols - 1)
             top2 = (i + 1) * cols + (cols - 1)
-            bot1 = offset + i * cols + (cols - 1)
-            bot2 = offset + (i + 1) * cols + (cols - 1)
+            bot1 = offset + bottom_idx_map[(i, cols - 1)]
+            bot2 = offset + bottom_idx_map[(i + 1, cols - 1)]
             faces.append([top1, top2, bot1])
             faces.append([top2, bot2, bot1])
 
@@ -185,8 +233,8 @@ class STLGenerator:
         for j in range(cols - 1):
             top1 = j
             top2 = j + 1
-            bot1 = offset + j
-            bot2 = offset + j + 1
+            bot1 = offset + bottom_idx_map[(0, j)]
+            bot2 = offset + bottom_idx_map[(0, j + 1)]
             faces.append([top1, top2, bot1])
             faces.append([top2, bot2, bot1])
 
@@ -194,8 +242,8 @@ class STLGenerator:
         for j in range(cols - 1):
             top1 = (rows - 1) * cols + j
             top2 = (rows - 1) * cols + j + 1
-            bot1 = offset + (rows - 1) * cols + j
-            bot2 = offset + (rows - 1) * cols + j + 1
+            bot1 = offset + bottom_idx_map[(rows - 1, j)]
+            bot2 = offset + bottom_idx_map[(rows - 1, j + 1)]
             faces.append([top1, bot1, top2])
             faces.append([top2, bot1, bot2])
 
@@ -342,8 +390,11 @@ class STLGenerator:
                     x_groups[x_key].append((i, j, vertex[1]))
 
         # For each X group, find clusters of Y values and merge them
-        # Vertices with Y values within merge_tolerance should be merged
-        merge_tolerance = pixel_size_mm * 0.5  # Half a pixel
+        # The merge tolerance needs to be large enough to cover the Y-compensation
+        # differences from varying heights. At each X, all z=0 vertices should
+        # merge into one of two groups: the back edge perimeter or the fan center.
+        # Use a larger tolerance that covers typical height variations.
+        merge_tolerance = pixel_size_mm * 2.0  # 2 pixels covers most height diffs
 
         for x_key, vertices in x_groups.items():
             if len(vertices) <= 1:
