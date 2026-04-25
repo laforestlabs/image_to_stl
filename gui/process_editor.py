@@ -73,8 +73,10 @@ class OperationDialog(QDialog):
                 if self.type_combo.itemData(i) == self.operation.type:
                     self.type_combo.setCurrentIndex(i)
                     break
-        else:
-            self._update_parameters()
+        # Always populate parameter widgets — when editing, the combo's
+        # currentIndexChanged only fires on actual change, so an unchanged
+        # selection leaves the form empty.
+        self._update_parameters()
 
     def _update_parameters(self):
         """Update parameter fields based on selected operation type"""

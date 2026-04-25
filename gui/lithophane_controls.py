@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QButtonGroup, QGroupBox, QScrollArea,
     QFrame, QComboBox
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QWheelEvent
 
 
@@ -112,9 +112,16 @@ class LithophaneControls(QWidget):
     """Direct controls for lithophane parameters"""
     parameters_changed = Signal()
 
+    DEBOUNCE_MS = 250
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._updating = False
+        # Coalesce rapid parameter changes (slider drag, repeated arrow-key
+        # presses) into a single reprocess.
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.timeout.connect(self.parameters_changed.emit)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -255,7 +262,7 @@ class LithophaneControls(QWidget):
 
     def _emit_changed(self):
         if not self._updating:
-            self.parameters_changed.emit()
+            self._debounce_timer.start(self.DEBOUNCE_MS)
 
     def get_parameters(self) -> dict:
         """Get current parameters as a dictionary"""

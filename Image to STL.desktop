@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Image to STL
+Comment=Convert images into 3D-printable lithophane STL files
+Exec=bash -c "cd '/home/jason/Documents/SW projects/image_to_stl' && python3 main.py"
+Path=/home/jason/Documents/SW projects/image_to_stl
+Icon=applications-graphics
+Terminal=false
+Categories=Graphics;3DGraphics;

@@ -25,9 +25,11 @@ def get_sample_image() -> Path:
 class TestPerformance:
     """Performance benchmarks for mesh generation"""
 
-    # Thresholds in seconds (with headroom for CI variance)
+    # Thresholds in seconds (with headroom for CI variance).
+    # Post-vectorization baseline: flat ~0.6s, angled ~1.2s on a typical machine.
     THRESHOLD_FLAT = 2.0        # angle=0, simplified mesh
-    THRESHOLD_ANGLED = 10.0     # angle=75, full processing
+    THRESHOLD_ANGLED = 3.0      # angle=75, full processing
+    THRESHOLD_BORDER = 1.0      # full reprocess including border texture
 
     def test_generation_time_flat(self):
         """Mesh generation at angle=0 should complete within threshold"""
@@ -126,6 +128,40 @@ class TestPerformance:
         # STL generation alone should be faster than full pipeline
         assert elapsed < self.THRESHOLD_ANGLED, \
             f"STL generation took {elapsed:.2f}s, threshold is {self.THRESHOLD_ANGLED}s"
+
+
+    def test_border_textures_fast(self):
+        """All border textures should run quickly post-vectorization"""
+        test_image = get_sample_image()
+        if not test_image:
+            pytest.skip("No sample images found")
+
+        textures = ["solid", "gradient", "ribbed", "dotted", "wave", "crosshatch"]
+        for texture in textures:
+            process = Process.from_dict({
+                'name': f'Border {texture}',
+                'operations': [{
+                    'type': 'set_lithophane_parameters',
+                    'parameters': {
+                        'width_mm': 75.0,
+                        'height_mm': 75.0,
+                        'min_thickness_mm': 0.8,
+                        'max_thickness_mm': 2.5,
+                        'pixels_per_mm': 4.0,
+                        'angle': 0.0,
+                        'border_width_mm': 5.0,
+                        'border_intensity': 80.0,
+                        'border_texture': texture,
+                    }
+                }]
+            })
+            processor = ImageProcessor()
+            start = time.perf_counter()
+            processor.execute_process(str(test_image), process)
+            elapsed = time.perf_counter() - start
+            print(f"\nBorder '{texture}': {elapsed:.3f}s")
+            assert elapsed < self.THRESHOLD_BORDER, \
+                f"Border {texture} took {elapsed:.2f}s, threshold {self.THRESHOLD_BORDER}s"
 
 
 if __name__ == "__main__":

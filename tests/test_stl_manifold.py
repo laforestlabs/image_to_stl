@@ -148,6 +148,49 @@ class TestSTLManifold:
         mesh = generate_stl_from_image(str(test_image), angle=75.0)
         assert mesh.is_watertight, f"Mesh from {test_image.name} at 75° is not watertight."
 
+    def test_non_square_dimensions_are_correct(self):
+        """A 100x50mm lithophane must produce a mesh whose X/Y bounds match.
+
+        Regression for the bug where pixel_size_mm was applied to both axes,
+        so non-square outputs came out with the wrong Y dimension.
+        """
+        from core.image_processor import ImageProcessor
+        from core.process import Process
+        from core.stl_generator import STLGenerator
+
+        sample = get_random_sample_image()
+        if not sample:
+            pytest.skip("No sample images found")
+
+        process = Process.from_dict({
+            "name": "Aspect",
+            "operations": [{
+                "type": "set_lithophane_parameters",
+                "parameters": {
+                    "width_mm": 100.0,
+                    "height_mm": 50.0,
+                    "min_thickness_mm": 0.5,
+                    "max_thickness_mm": 2.0,
+                    "pixels_per_mm": 2.0,
+                    "angle": 0.0,
+                },
+            }],
+        })
+
+        proc = ImageProcessor()
+        hm = proc.execute_process(str(sample), process)
+        gen = STLGenerator()
+        m = gen.generate_from_heightmap(
+            hm, pixel_size_mm=proc.get_pixel_size_mm(),
+            angle=0.0, pixel_size_mm_y=proc.get_pixel_size_mm_y(),
+        )
+
+        verts = m.vectors.reshape(-1, 3)
+        x_extent = verts[:, 0].max() - verts[:, 0].min()
+        y_extent = verts[:, 1].max() - verts[:, 1].min()
+        assert abs(x_extent - 100.0) < 0.05, f"X extent {x_extent}"
+        assert abs(y_extent - 50.0) < 0.05, f"Y extent {y_extent}"
+
 
 class TestMeshTriangleCount:
     """Test that mesh simplification actually reduces triangle count"""

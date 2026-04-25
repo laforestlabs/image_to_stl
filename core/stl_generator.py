@@ -11,31 +11,31 @@ class STLGenerator:
     def __init__(self):
         self.mesh = None
 
-    def generate_from_heightmap(self, height_map: np.ndarray, pixel_size_mm: float = 0.1, angle: float = 75.0) -> mesh.Mesh:
+    def generate_from_heightmap(self, height_map: np.ndarray, pixel_size_mm: float = 0.1,
+                                angle: float = 75.0, pixel_size_mm_y: float = None) -> mesh.Mesh:
         """
         Generate an STL mesh from a height map
 
         Args:
             height_map: 2D numpy array where values represent heights in mm
-            pixel_size_mm: Physical size of each pixel in mm
+            pixel_size_mm: X-axis vertex spacing in mm
             angle: Build angle in degrees (0=flat, 90=vertical)
+            pixel_size_mm_y: Y-axis vertex spacing in mm (defaults to pixel_size_mm)
 
         Returns:
             numpy-stl Mesh object
         """
+        if pixel_size_mm_y is None:
+            pixel_size_mm_y = pixel_size_mm
+
         rows, cols = height_map.shape
 
-        # Create vertices for the top surface
-        # Note: Flip Y so image top (row 0) maps to high Y, making the STL right-side-up
-        vertices_top = []
-        for i in range(rows):
-            for j in range(cols):
-                x = j * pixel_size_mm
-                y = (rows - 1 - i) * pixel_size_mm
-                z = height_map[i, j]
-                vertices_top.append([x, y, z])
-
-        vertices_top = np.array(vertices_top)
+        # Create top-surface vertices vectorized.
+        # Flip Y so image top (row 0) maps to high Y, making the STL right-side-up.
+        xs = np.arange(cols) * pixel_size_mm
+        ys = (rows - 1 - np.arange(rows)) * pixel_size_mm_y
+        xx, yy = np.meshgrid(xs, ys)
+        vertices_top = np.stack([xx.ravel(), yy.ravel(), height_map.ravel()], axis=1).astype(float)
 
         # Choose mesh strategy based on angle
         # angle=0: simplified bottom (4 corners) - saves ~50% triangles
@@ -43,9 +43,9 @@ class STLGenerator:
         use_simplified_bottom = (angle == 0)
 
         if use_simplified_bottom:
-            stl_mesh = self._create_simplified_mesh(vertices_top, rows, cols, pixel_size_mm)
+            stl_mesh = self._create_simplified_mesh(vertices_top, rows, cols, pixel_size_mm, pixel_size_mm_y)
         else:
-            stl_mesh = self._create_grid_mesh(vertices_top, rows, cols, pixel_size_mm)
+            stl_mesh = self._create_grid_mesh(vertices_top, rows, cols, pixel_size_mm, pixel_size_mm_y)
 
         # Apply rotation around X-axis if angle is not 0
         if angle != 0 and angle != 90:
@@ -58,10 +58,13 @@ class STLGenerator:
         self.mesh = stl_mesh
         return stl_mesh
 
-    def _create_simplified_mesh(self, vertices_top: np.ndarray, rows: int, cols: int, pixel_size_mm: float) -> mesh.Mesh:
+    def _create_simplified_mesh(self, vertices_top: np.ndarray, rows: int, cols: int,
+                                pixel_size_mm: float, pixel_size_mm_y: float = None) -> mesh.Mesh:
         """Create mesh with simplified bottom (4 corners, 2 triangles) for angle=0"""
+        if pixel_size_mm_y is None:
+            pixel_size_mm_y = pixel_size_mm
         max_x = (cols - 1) * pixel_size_mm
-        max_y = (rows - 1) * pixel_size_mm
+        max_y = (rows - 1) * pixel_size_mm_y
         vertices_bottom = np.array([
             [0, max_y, 0],      # TL - top-left (high Y, low X)
             [max_x, max_y, 0],  # TR - top-right (high Y, high X)
@@ -123,7 +126,8 @@ class STLGenerator:
 
         return stl_mesh
 
-    def _create_grid_mesh(self, vertices_top: np.ndarray, rows: int, cols: int, pixel_size_mm: float) -> mesh.Mesh:
+    def _create_grid_mesh(self, vertices_top: np.ndarray, rows: int, cols: int,
+                          pixel_size_mm: float, pixel_size_mm_y: float = None) -> mesh.Mesh:
         """Create mesh with simplified back face using perimeter fan triangulation.
 
         Uses perimeter fan for back face:
@@ -132,8 +136,10 @@ class STLGenerator:
 
         The _merge_z0_vertices() function handles vertex alignment after rotation.
         """
+        if pixel_size_mm_y is None:
+            pixel_size_mm_y = pixel_size_mm
         max_x = (cols - 1) * pixel_size_mm
-        max_y = (rows - 1) * pixel_size_mm
+        max_y = (rows - 1) * pixel_size_mm_y
 
         # Bottom perimeter vertices only (not full grid)
         vertices_bottom = []
@@ -156,14 +162,14 @@ class STLGenerator:
         # Left edge (j=0), excluding corners already added
         for i in range(1, rows - 1):
             x = 0
-            y = (rows - 1 - i) * pixel_size_mm
+            y = (rows - 1 - i) * pixel_size_mm_y
             bottom_idx_map[(i, 0)] = len(vertices_bottom)
             vertices_bottom.append([x, y, 0])
 
         # Right edge (j=cols-1), excluding corners already added
         for i in range(1, rows - 1):
             x = max_x
-            y = (rows - 1 - i) * pixel_size_mm
+            y = (rows - 1 - i) * pixel_size_mm_y
             bottom_idx_map[(i, cols - 1)] = len(vertices_bottom)
             vertices_bottom.append([x, y, 0])
 
@@ -271,13 +277,11 @@ class STLGenerator:
         cos_a = np.cos(angle_rad)
         sin_a = np.sin(angle_rad)
 
-        # Rotation matrix around X-axis
-        for i in range(len(stl_mesh.vectors)):
-            for j in range(3):
-                y = stl_mesh.vectors[i][j][1]
-                z = stl_mesh.vectors[i][j][2]
-                stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
-                stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
+        # Rotate around X-axis vectorized over all (triangle, vertex) pairs.
+        ys = stl_mesh.vectors[..., 1].copy()
+        zs = stl_mesh.vectors[..., 2].copy()
+        stl_mesh.vectors[..., 1] = ys * cos_a - zs * sin_a
+        stl_mesh.vectors[..., 2] = ys * sin_a + zs * cos_a
 
         # Create a flat bottom
         min_z = stl_mesh.vectors[:, :, 2].min()
@@ -347,16 +351,11 @@ class STLGenerator:
 
     def _apply_vertical_rotation(self, stl_mesh: mesh.Mesh) -> mesh.Mesh:
         """Apply 90 degree rotation for vertical builds"""
-        angle_rad = np.radians(90)
-        cos_a = np.cos(angle_rad)
-        sin_a = np.sin(angle_rad)
-
-        for i in range(len(stl_mesh.vectors)):
-            for j in range(3):
-                y = stl_mesh.vectors[i][j][1]
-                z = stl_mesh.vectors[i][j][2]
-                stl_mesh.vectors[i][j][1] = y * cos_a - z * sin_a
-                stl_mesh.vectors[i][j][2] = y * sin_a + z * cos_a
+        # 90° rotation around X: (y, z) -> (-z, y). cos=0, sin=1 — exact.
+        ys = stl_mesh.vectors[..., 1].copy()
+        zs = stl_mesh.vectors[..., 2].copy()
+        stl_mesh.vectors[..., 1] = -zs
+        stl_mesh.vectors[..., 2] = ys
 
         # Translate so bottom sits on build plate
         min_z = stl_mesh.vectors[:, :, 2].min()
@@ -366,27 +365,33 @@ class STLGenerator:
 
     def _remove_duplicate_faces(self, stl_mesh: mesh.Mesh) -> mesh.Mesh:
         """Remove duplicate faces that have the same vertices (regardless of order)"""
-        seen_faces = set()
-        valid_indices = []
+        n = len(stl_mesh.vectors)
+        if n == 0:
+            return stl_mesh
 
-        for i, triangle in enumerate(stl_mesh.vectors):
-            # Create a canonical representation of the face
-            # Sort vertices to create order-independent key
-            verts = [tuple(np.round(v, 6)) for v in triangle]
-            face_key = tuple(sorted(verts))
+        # Round to int keys to avoid float-precision misses.
+        rounded = np.round(stl_mesh.vectors * 1e6).astype(np.int64)  # (N, 3, 3)
 
-            if face_key not in seen_faces:
-                seen_faces.add(face_key)
-                valid_indices.append(i)
+        # Sort the 3 vertices within each triangle so order-permuted faces
+        # produce identical keys. Use a structured dtype so np.sort orders
+        # vertices lexicographically as (x, y, z) tuples.
+        rec_dtype = np.dtype([('x', 'i8'), ('y', 'i8'), ('z', 'i8')])
+        recs = np.empty((n, 3), dtype=rec_dtype)
+        recs['x'] = rounded[..., 0]
+        recs['y'] = rounded[..., 1]
+        recs['z'] = rounded[..., 2]
+        recs.sort(axis=1)
 
-        if len(valid_indices) == len(stl_mesh.vectors):
-            return stl_mesh  # No duplicates
+        # Now the 3 vertices are canonically ordered; dedupe by row.
+        keys = recs.view(np.int64).reshape(n, 9)
+        _, unique_idx = np.unique(keys, axis=0, return_index=True)
 
-        # Create new mesh without duplicates
-        new_mesh = mesh.Mesh(np.zeros(len(valid_indices), dtype=mesh.Mesh.dtype))
-        for new_idx, old_idx in enumerate(valid_indices):
-            new_mesh.vectors[new_idx] = stl_mesh.vectors[old_idx]
+        if len(unique_idx) == n:
+            return stl_mesh
 
+        unique_idx.sort()  # preserve original triangle order
+        new_mesh = mesh.Mesh(np.zeros(len(unique_idx), dtype=mesh.Mesh.dtype))
+        new_mesh.vectors[:] = stl_mesh.vectors[unique_idx]
         return new_mesh
 
     def _merge_z0_vertices(self, stl_mesh: mesh.Mesh, pixel_size_mm: float) -> mesh.Mesh:
@@ -451,52 +456,21 @@ class STLGenerator:
 
         return stl_mesh
 
-    def _merge_close_vertices(self, stl_mesh: mesh.Mesh, tolerance: float = 1e-6) -> mesh.Mesh:
-        """Merge vertices that are very close together to avoid numeric precision issues"""
-        # Flatten all vertices from all triangles
-        all_vertices = stl_mesh.vectors.reshape(-1, 3)
-
-        # Find unique vertices with tolerance
-        unique_vertices = []
-        vertex_map = {}  # maps original vertex tuple to unique index
-
-        for v in all_vertices:
-            v_tuple = tuple(np.round(v / tolerance) * tolerance)
-            if v_tuple not in vertex_map:
-                vertex_map[v_tuple] = len(unique_vertices)
-                unique_vertices.append(v_tuple)
-
-        # Reconstruct mesh with merged vertices
-        for i, triangle in enumerate(stl_mesh.vectors):
-            for j, vertex in enumerate(triangle):
-                v_tuple = tuple(np.round(vertex / tolerance) * tolerance)
-                # Update vertex to the canonical position
-                stl_mesh.vectors[i][j] = np.array(v_tuple)
-
-        return stl_mesh
-
     def _remove_degenerate_triangles(self, stl_mesh: mesh.Mesh) -> mesh.Mesh:
         """Remove triangles where vertices have collapsed to the same position"""
         tolerance = 1e-6
-        valid_indices = []
+        v = stl_mesh.vectors  # (N, 3, 3)
+        # Edge lengths for all triangles at once.
+        d01 = np.linalg.norm(v[:, 1] - v[:, 0], axis=1)
+        d12 = np.linalg.norm(v[:, 2] - v[:, 1], axis=1)
+        d20 = np.linalg.norm(v[:, 0] - v[:, 2], axis=1)
+        keep = (d01 > tolerance) & (d12 > tolerance) & (d20 > tolerance)
 
-        for i, triangle in enumerate(stl_mesh.vectors):
-            v0, v1, v2 = triangle
-            # Check if any two vertices are too close (degenerate)
-            d01 = np.linalg.norm(v1 - v0)
-            d12 = np.linalg.norm(v2 - v1)
-            d20 = np.linalg.norm(v0 - v2)
-            if d01 > tolerance and d12 > tolerance and d20 > tolerance:
-                valid_indices.append(i)
+        if keep.all():
+            return stl_mesh
 
-        if len(valid_indices) == len(stl_mesh.vectors):
-            return stl_mesh  # No degenerate triangles
-
-        # Create new mesh with only valid triangles
-        new_mesh = mesh.Mesh(np.zeros(len(valid_indices), dtype=mesh.Mesh.dtype))
-        for new_idx, old_idx in enumerate(valid_indices):
-            new_mesh.vectors[new_idx] = stl_mesh.vectors[old_idx]
-
+        new_mesh = mesh.Mesh(np.zeros(int(keep.sum()), dtype=mesh.Mesh.dtype))
+        new_mesh.vectors[:] = stl_mesh.vectors[keep]
         return new_mesh
 
     def save(self, filepath: str):

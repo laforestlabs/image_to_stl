@@ -1,6 +1,7 @@
 """
 Main application window
 """
+import json
 import random
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -44,7 +45,13 @@ class ProcessingWorker(QThread):
             # Generate STL with correct pixel size for proper dimensions
             angle = self.image_processor.get_angle()
             pixel_size_mm = self.image_processor.get_pixel_size_mm()
-            self.stl_generator.generate_from_heightmap(height_map, pixel_size_mm=pixel_size_mm, angle=angle)
+            pixel_size_mm_y = self.image_processor.get_pixel_size_mm_y()
+            self.stl_generator.generate_from_heightmap(
+                height_map,
+                pixel_size_mm=pixel_size_mm,
+                angle=angle,
+                pixel_size_mm_y=pixel_size_mm_y,
+            )
 
             self.finished.emit(height_map)
         except Exception as e:
@@ -95,7 +102,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.current_process = None
+        # Single source of truth for the process lives in self.process_editor.
+        # We only track the file path here so save-without-as works.
         self.current_process_file = None
         self.current_image_file = None
         self.image_processor = ImageProcessor()
@@ -117,12 +125,55 @@ class MainWindow(QMainWindow):
             height
         )
 
+        self.setAcceptDrops(True)
+
         self._setup_menu_bar()
         self._setup_ui()
+
+    def dragEnterEvent(self, event):
+        """Accept drags that contain at least one supported image file."""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    suffix = Path(url.toLocalFile()).suffix.lower()
+                    if suffix in self.SUPPORTED_IMAGE_SUFFIXES:
+                        event.acceptProposedAction()
+                        return
+        event.ignore()
+
+    def dropEvent(self, event):
+        """Load the first dropped image file."""
+        for url in event.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            path = url.toLocalFile()
+            if Path(path).suffix.lower() in self.SUPPORTED_IMAGE_SUFFIXES:
+                self._load_image_from_path(path)
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    RECENT_IMAGES_MAX = 8
+    RECENT_FILE_PATH = Path(__file__).parent.parent / "processes" / ".recent.json"
 
     def _setup_menu_bar(self):
         """Setup the menu bar"""
         menu_bar = self.menuBar()
+
+        # File menu
+        file_menu = menu_bar.addMenu("File")
+
+        open_image_action = QAction("Open Image…", self)
+        open_image_action.setShortcut(QKeySequence.Open)
+        open_image_action.triggered.connect(self._load_image)
+        file_menu.addAction(open_image_action)
+
+        open_process_action = QAction("Open Process…", self)
+        open_process_action.triggered.connect(self._load_process)
+        file_menu.addAction(open_process_action)
+
+        self.recent_menu = file_menu.addMenu("Recent Images")
+        self._refresh_recent_menu()
 
         # View menu
         view_menu = menu_bar.addMenu("View")
@@ -133,6 +184,46 @@ class MainWindow(QMainWindow):
         self.fullscreen_action.setCheckable(True)
         self.fullscreen_action.triggered.connect(self._toggle_fullscreen)
         view_menu.addAction(self.fullscreen_action)
+
+    def _load_recent_list(self) -> list:
+        try:
+            if self.RECENT_FILE_PATH.exists():
+                data = json.loads(self.RECENT_FILE_PATH.read_text())
+                if isinstance(data, list):
+                    return [p for p in data if isinstance(p, str)]
+        except Exception:
+            pass
+        return []
+
+    def _save_recent_list(self, paths: list):
+        try:
+            self.RECENT_FILE_PATH.write_text(json.dumps(paths, indent=2))
+        except Exception:
+            pass  # non-critical
+
+    def _add_to_recent(self, file_path: str):
+        recent = [p for p in self._load_recent_list() if p != file_path]
+        recent.insert(0, file_path)
+        recent = recent[: self.RECENT_IMAGES_MAX]
+        self._save_recent_list(recent)
+        self._refresh_recent_menu()
+
+    def _refresh_recent_menu(self):
+        if not hasattr(self, "recent_menu"):
+            return
+        self.recent_menu.clear()
+        recent = self._load_recent_list()
+        if not recent:
+            empty = QAction("(none)", self)
+            empty.setEnabled(False)
+            self.recent_menu.addAction(empty)
+            return
+        for path in recent:
+            display = Path(path).name
+            action = QAction(display, self)
+            action.setToolTip(path)
+            action.triggered.connect(lambda _checked=False, p=path: self._load_image_from_path(p))
+            self.recent_menu.addAction(action)
 
     def _toggle_fullscreen(self):
         """Toggle fullscreen mode"""
@@ -251,11 +342,11 @@ class MainWindow(QMainWindow):
         default_path = Path(__file__).parent.parent / "processes" / "default.json"
         if default_path.exists():
             try:
-                self.current_process = Process.load(default_path)
-                self.process_editor.set_process(self.current_process)
+                process = Process.load(default_path)
+                self.process_editor.set_process(process)
                 # Sync lithophane controls with the process
                 self._sync_controls_from_process()
-                self.status_label.setText(f"Loaded default process: {self.current_process.name}")
+                self.status_label.setText(f"Loaded default process: {process.name}")
             except Exception as e:
                 self.status_label.setText(f"Could not load default process: {e}")
 
@@ -330,12 +421,12 @@ class MainWindow(QMainWindow):
 
         if file_path:
             try:
-                self.current_process = Process.load(Path(file_path))
+                process = Process.load(Path(file_path))
                 self.current_process_file = file_path
-                self.process_editor.set_process(self.current_process)
+                self.process_editor.set_process(process)
                 # Sync lithophane controls with the loaded process
                 self._sync_controls_from_process()
-                self.status_label.setText(f"Loaded process: {self.current_process.name}")
+                self.status_label.setText(f"Loaded process: {process.name}")
 
                 # Re-process if we have an image loaded
                 if self.current_image_file:
@@ -372,6 +463,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save process: {e}")
 
+    SUPPORTED_IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+
     def _load_image(self):
         """Load an image file and automatically process it"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -380,16 +473,16 @@ class MainWindow(QMainWindow):
             str(Path(__file__).parent.parent / "samples"),
             "Image Files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)"
         )
-
         if file_path:
-            self.current_image_file = file_path
-            self.status_label.setText(f"Loaded image: {Path(file_path).name}")
+            self._load_image_from_path(file_path)
 
-            # Display original image preview
-            self._update_original_image_preview(file_path)
-
-            # Automatically process the image
-            self._process_image()
+    def _load_image_from_path(self, file_path: str):
+        """Shared loader used by file dialog, drag-drop, and recent files."""
+        self.current_image_file = file_path
+        self.status_label.setText(f"Loaded image: {Path(file_path).name}")
+        self._update_original_image_preview(file_path)
+        self._add_to_recent(file_path)
+        self._process_image()
 
     def _update_original_image_preview(self, file_path: str):
         """Update the original image preview"""
@@ -442,8 +535,10 @@ class MainWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.worker.wait()
 
-        # Show loading dialog
+        # Show loading dialog non-modally so a fast worker can't beat the
+        # event loop and try to close a dialog whose exec() hasn't started.
         self.loading_dialog = LoadingDialog(self)
+        self.loading_dialog.show()
 
         # Create and start worker thread with crop coordinates
         self.worker = ProcessingWorker(
@@ -457,14 +552,11 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self._on_processing_error)
         self.worker.start()
 
-        # Show the dialog (blocks until closed)
-        self.loading_dialog.exec()
-
     def _on_processing_finished(self, height_map):
         """Handle successful processing completion"""
         # Close loading dialog
         if self.loading_dialog:
-            self.loading_dialog.accept()
+            self.loading_dialog.close()
             self.loading_dialog = None
 
         # Update processed image preview
@@ -477,7 +569,7 @@ class MainWindow(QMainWindow):
         """Handle processing error"""
         # Close loading dialog
         if self.loading_dialog:
-            self.loading_dialog.reject()
+            self.loading_dialog.close()
             self.loading_dialog = None
 
         QMessageBox.critical(self, "Error", f"Failed to process image: {error_msg}")

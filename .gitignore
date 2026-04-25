@@ -37,6 +37,7 @@ env/
 # Generated files
 *.stl
 test_output.stl
+processes/.recent.json
 
 # OS
 .DS_Store

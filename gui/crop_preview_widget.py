@@ -19,7 +19,7 @@ class CropPreviewWidget(QWidget):
     # Signal emitted when crop region changes: (x, y, width, height) normalized 0-1
     crop_changed = Signal(float, float, float, float)
 
-    HANDLE_RADIUS = 8
+    HANDLE_RADIUS_BASE = 8  # Logical px; multiplied by devicePixelRatio
     CROP_BOX_COLOR = QColor(255, 0, 0, 200)
     CROP_BOX_BORDER = QColor(255, 0, 0, 255)
     HANDLE_FILL = QColor(255, 255, 255, 255)
@@ -131,6 +131,12 @@ class CropPreviewWidget(QWidget):
         h = self._crop_h * self._image_rect.height()
 
         return QRectF(x, y, w, h)
+
+    @property
+    def HANDLE_RADIUS(self) -> int:
+        # Scale handle size by display pixel ratio so HiDPI screens get
+        # appropriately-sized hit targets.
+        return int(self.HANDLE_RADIUS_BASE * max(1.0, self.devicePixelRatioF()))
 
     def _get_handle_rects(self) -> dict:
         """Get rectangles for each corner handle"""

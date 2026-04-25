@@ -29,9 +29,25 @@ pip install -r requirements.txt
 
 ## Usage
 
+### Launching
+
+From a terminal in the project folder:
+
 ```bash
-python main.py
+python3 main.py
 ```
+
+Or use one of the included launchers:
+
+- **`launch.sh`** — a shell script that runs the app. To make it double-clickable in GNOME Files, open Files → hamburger menu → **Preferences** → **Behavior** → set **Executable Text Files** to *"Run them"* or *"Ask what to do"*.
+- **`Image to STL.desktop`** — a Linux app launcher. Modern GNOME only treats `.desktop` files as launchers when installed system-wide. To get an entry in the app grid:
+
+  ```bash
+  cp "Image to STL.desktop" ~/.local/share/applications/
+  update-desktop-database ~/.local/share/applications
+  ```
+
+  After this, search "Image to STL" in Activities and pin it to your dash.
 
 ### Quick Start
 

@@ -15,7 +15,8 @@ class ImageProcessor:
         self.current_image: Optional[Image.Image] = None
         self.height_map: Optional[np.ndarray] = None
         self.angle: float = 75.0  # Build angle in degrees
-        self.pixel_size_mm: float = 0.5  # Physical size of each pixel (1/pixels_per_mm)
+        self.pixel_size_mm: float = 0.5  # X spacing between vertices (mm)
+        self.pixel_size_mm_y: float = 0.5  # Y spacing between vertices (mm)
 
     def execute_process(self, image_path: str, process: Process, crop_rect: tuple = None) -> np.ndarray:
         """
@@ -107,11 +108,12 @@ class ImageProcessor:
         # Default 2 pixels/mm gives good quality without excessive triangles
         # (100x100mm = 200x200 pixels = ~160k triangles, reasonable for preview)
         pixels_per_mm = params.get("pixels_per_mm", 2.0)
-        target_width_pixels = int(width_mm * pixels_per_mm)
-        target_height_pixels = int(height_mm * pixels_per_mm)
-        # pixel_size_mm is the spacing between vertices (fence-post problem)
-        # N pixels = N-1 gaps, so to span width_mm we need width_mm/(N-1) per gap
+        # Need at least 2 pixels per axis to compute fence-post spacing
+        target_width_pixels = max(2, int(width_mm * pixels_per_mm))
+        target_height_pixels = max(2, int(height_mm * pixels_per_mm))
+        # Per-axis spacing between vertices (fence-post: N pixels = N-1 gaps)
         self.pixel_size_mm = width_mm / (target_width_pixels - 1)
+        self.pixel_size_mm_y = height_mm / (target_height_pixels - 1)
 
         # Calculate aspect ratios
         target_aspect = width_mm / height_mm
@@ -140,16 +142,17 @@ class ImageProcessor:
             # Background tint: 0% = white (255), 100% = black (0)
             bg_gray = int(255 * (1.0 - background_tint / 100.0))
 
-            # Create appropriate fill value based on image mode
+            # Normalize unusual modes (palettized, CMYK, LA, etc.) up front so
+            # Image.new + paste accepts a uniform fill value.
+            if self.current_image.mode not in ('L', 'RGB', 'RGBA'):
+                self.current_image = self.current_image.convert('RGB')
             mode = self.current_image.mode
             if mode == 'L':
                 bg_value = bg_gray
             elif mode == 'RGB':
                 bg_value = (bg_gray, bg_gray, bg_gray)
-            elif mode == 'RGBA':
+            else:  # RGBA
                 bg_value = (bg_gray, bg_gray, bg_gray, 255)
-            else:
-                bg_value = bg_gray
 
             if src_aspect > target_aspect:
                 # Source is wider - pad top/bottom
@@ -225,102 +228,67 @@ class ImageProcessor:
 
         # Base border gray value (0=black, 255=white)
         # intensity 0 = white (255), intensity 1 = black (0)
-        base_gray = 255 * (1.0 - intensity)
+        base_gray = 255.0 * (1.0 - intensity)
 
-        # Create border mask based on texture
+        # Distance-from-nearest-edge map (vectorized).
+        ys = np.arange(h)[:, None]
+        xs = np.arange(w)[None, :]
+        dist = np.minimum(np.minimum(xs, w - 1 - xs), np.minimum(ys, h - 1 - ys))
+        in_border = dist < width_pixels
+
+        if not in_border.any():
+            return
+
         if texture == "solid":
-            # Simple solid border
-            for y in range(h):
-                for x in range(w):
-                    dist = min(x, y, w - 1 - x, h - 1 - y)
-                    if dist < width_pixels:
-                        img_array[y, x] = base_gray
+            img_array = np.where(in_border, base_gray, img_array)
 
         elif texture == "gradient":
-            # Gradient that fades from border intensity to image
-            for y in range(h):
-                for x in range(w):
-                    dist = min(x, y, w - 1 - x, h - 1 - y)
-                    if dist < width_pixels:
-                        # Fade factor: 0 at edge, 1 at inner border edge
-                        fade = dist / width_pixels
-                        img_array[y, x] = base_gray * (1 - fade) + img_array[y, x] * fade
+            fade = np.clip(dist / max(width_pixels, 1), 0.0, 1.0)
+            blended = base_gray * (1 - fade) + img_array * fade
+            img_array = np.where(in_border, blended, img_array)
 
         elif texture == "ribbed":
-            # Vertical ribbed pattern
             rib_spacing = max(3, width_pixels // 4)
-            for y in range(h):
-                for x in range(w):
-                    dist = min(x, y, w - 1 - x, h - 1 - y)
-                    if dist < width_pixels:
-                        # Create ribs based on position along border
-                        if y < width_pixels or y >= h - width_pixels:
-                            rib_pos = x % rib_spacing
-                        else:
-                            rib_pos = y % rib_spacing
-                        rib_factor = 0.5 + 0.5 * math.sin(rib_pos / rib_spacing * math.pi * 2)
-                        gray = base_gray * (0.7 + 0.3 * rib_factor)
-                        img_array[y, x] = gray
+            # Pos along border: x for top/bottom strips, y for left/right strips.
+            top_or_bottom = (ys < width_pixels) | (ys >= h - width_pixels)
+            rib_pos = np.where(top_or_bottom, xs % rib_spacing, ys % rib_spacing)
+            rib_factor = 0.5 + 0.5 * np.sin(rib_pos / rib_spacing * math.pi * 2)
+            gray = base_gray * (0.7 + 0.3 * rib_factor)
+            img_array = np.where(in_border, gray, img_array)
 
         elif texture == "dotted":
-            # Perforated dot pattern
             dot_spacing = max(4, width_pixels // 3)
             dot_radius = max(1, dot_spacing // 3)
-            for y in range(h):
-                for x in range(w):
-                    dist = min(x, y, w - 1 - x, h - 1 - y)
-                    if dist < width_pixels:
-                        # Check if we're in a dot
-                        dx = x % dot_spacing - dot_spacing // 2
-                        dy = y % dot_spacing - dot_spacing // 2
-                        in_dot = (dx * dx + dy * dy) < (dot_radius * dot_radius)
-                        if in_dot:
-                            img_array[y, x] = 255  # White (thin) for dots
-                        else:
-                            img_array[y, x] = base_gray
+            dx = xs % dot_spacing - dot_spacing // 2
+            dy = ys % dot_spacing - dot_spacing // 2
+            in_dot = (dx * dx + dy * dy) < (dot_radius * dot_radius)
+            border_pixels = np.where(in_dot, 255.0, base_gray)
+            img_array = np.where(in_border, border_pixels, img_array)
 
         elif texture == "wave":
-            # Sine wave pattern along border
             wave_freq = 2 * math.pi / max(10, width_pixels * 2)
             wave_amp = width_pixels * 0.3
-            for y in range(h):
-                for x in range(w):
-                    dist = min(x, y, w - 1 - x, h - 1 - y)
-                    if dist < width_pixels:
-                        # Determine which edge we're on and position along it
-                        if y < width_pixels:
-                            pos = x
-                        elif y >= h - width_pixels:
-                            pos = x
-                        elif x < width_pixels:
-                            pos = y
-                        else:
-                            pos = y
-                        wave = math.sin(pos * wave_freq) * wave_amp
-                        effective_dist = dist + wave
-                        if effective_dist < width_pixels * 0.7:
-                            img_array[y, x] = base_gray
-                        elif effective_dist < width_pixels:
-                            fade = (effective_dist - width_pixels * 0.7) / (width_pixels * 0.3)
-                            img_array[y, x] = base_gray * (1 - fade) + img_array[y, x] * fade
+            # Position along the border edge depends on which edge we're nearest.
+            top_or_bottom = (ys < width_pixels) | (ys >= h - width_pixels)
+            pos = np.where(top_or_bottom, xs, ys)
+            wave = np.sin(pos * wave_freq) * wave_amp
+            effective_dist = dist + wave
+            inner_band = effective_dist < width_pixels * 0.7
+            outer_band = (~inner_band) & (effective_dist < width_pixels)
+            outer_fade = (effective_dist - width_pixels * 0.7) / max(width_pixels * 0.3, 1e-6)
+            outer_blend = base_gray * (1 - outer_fade) + img_array * outer_fade
+            img_array = np.where(in_border & inner_band, base_gray, img_array)
+            img_array = np.where(in_border & outer_band, outer_blend, img_array)
 
         elif texture == "crosshatch":
-            # Crosshatch diagonal pattern
             line_spacing = max(3, width_pixels // 3)
-            for y in range(h):
-                for x in range(w):
-                    dist = min(x, y, w - 1 - x, h - 1 - y)
-                    if dist < width_pixels:
-                        # Diagonal lines in both directions
-                        diag1 = (x + y) % line_spacing < 2
-                        diag2 = (x - y) % line_spacing < 2
-                        if diag1 or diag2:
-                            img_array[y, x] = base_gray * 0.7
-                        else:
-                            img_array[y, x] = base_gray
+            diag1 = (xs + ys) % line_spacing < 2
+            diag2 = (xs - ys) % line_spacing < 2
+            on_line = diag1 | diag2
+            border_pixels = np.where(on_line, base_gray * 0.7, base_gray)
+            img_array = np.where(in_border, border_pixels, img_array)
 
-        # Convert back to PIL Image
-        self.current_image = Image.fromarray(img_array.astype(np.uint8), mode='L')
+        self.current_image = Image.fromarray(np.clip(img_array, 0, 255).astype(np.uint8), mode='L')
 
     def get_current_image(self) -> Optional[Image.Image]:
         """Get the current processed image"""
@@ -335,5 +303,9 @@ class ImageProcessor:
         return self.angle
 
     def get_pixel_size_mm(self) -> float:
-        """Get the pixel size in mm (1/pixels_per_mm)"""
+        """Get the X-axis vertex spacing in mm"""
         return self.pixel_size_mm
+
+    def get_pixel_size_mm_y(self) -> float:
+        """Get the Y-axis vertex spacing in mm"""
+        return self.pixel_size_mm_y
