@@ -179,6 +179,9 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.loading_dialog = None
         self._current_crop = (0.0, 0.0, 1.0, 1.0)  # Normalized crop coords (x, y, w, h)
+        # Guards prevent cascading signals from spawning duplicate workers
+        # during a programmatic load (preset switch or new image).
+        self._loading_image = False
 
         self.setWindowTitle("Image to STL Converter")
 
@@ -625,10 +628,20 @@ class MainWindow(QMainWindow):
 
     def _load_image_from_path(self, file_path: str):
         """Shared loader used by file dialog, drag-drop, and recent files."""
-        self.current_image_file = file_path
-        self.status_label.setText(f"Loaded image: {Path(file_path).name}")
-        self._update_original_image_preview(file_path)
-        self._add_to_recent(file_path)
+        # _update_original_image_preview calls crop_preview.reset_crop(), which
+        # emits crop_changed → _on_crop_changed → _process_image. The guard
+        # below suppresses that intermediate worker so the single explicit
+        # _process_image() call below is the only trigger; otherwise we get
+        # two workers and the dialog stalls at 100% (same failure mode as
+        # the preset double-spawn we already fixed).
+        self._loading_image = True
+        try:
+            self.current_image_file = file_path
+            self.status_label.setText(f"Loaded image: {Path(file_path).name}")
+            self._update_original_image_preview(file_path)
+            self._add_to_recent(file_path)
+        finally:
+            self._loading_image = False
         self._process_image()
 
     def _update_original_image_preview(self, file_path: str):
@@ -764,10 +777,12 @@ class MainWindow(QMainWindow):
 
     def _on_crop_changed(self, x: float, y: float, w: float, h: float):
         """Handle crop region changes from the preview widget"""
-        # Store the crop coordinates
+        # Store the crop coordinates so the worker reads the latest value.
         self._current_crop = (x, y, w, h)
-
-        # Reprocess the image with the new crop
+        # During programmatic image load, _load_image_from_path owns the
+        # single _process_image call — skip the cascade-driven one.
+        if self._loading_image:
+            return
         if self.current_image_file:
             self._process_image()
 
