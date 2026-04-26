@@ -522,12 +522,11 @@ class MainWindow(QMainWindow):
             self._process_image()
 
     def _load_random_sample_image(self):
-        """Load a random sample image on startup"""
+        """Load a random sample image on startup, skipping any unreadable files."""
         samples_dir = Path(__file__).parent.parent / "samples"
         if not samples_dir.exists():
             return
 
-        # Find all image files in samples and subdirectories
         image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
         image_files = []
         for ext in image_extensions:
@@ -537,14 +536,26 @@ class MainWindow(QMainWindow):
         if not image_files:
             return
 
-        # Select a random image
-        random_image = random.choice(image_files)
-        self.current_image_file = str(random_image)
+        # A handful of bundled samples are corrupt (HTML pages saved with .jpg
+        # extension). Shuffle the full list and verify each candidate's image
+        # header until one opens cleanly so we don't surface that as a startup
+        # error dialog.
+        random.shuffle(image_files)
+        chosen = None
+        for candidate in image_files:
+            try:
+                with Image.open(candidate) as probe:
+                    probe.verify()
+                chosen = candidate
+                break
+            except Exception:
+                continue
+        if chosen is None:
+            return
 
-        # Update the original image preview (this triggers processing via crop_changed signal)
+        self.current_image_file = str(chosen)
         self._update_original_image_preview(self.current_image_file)
-
-        self.status_label.setText(f"Loaded sample: {random_image.name}")
+        self.status_label.setText(f"Loaded sample: {chosen.name}")
 
     def _load_process(self):
         """Load a process from a JSON file"""
