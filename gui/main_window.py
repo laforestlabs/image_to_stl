@@ -226,6 +226,7 @@ class MainWindow(QMainWindow):
 
     RECENT_IMAGES_MAX = 8
     RECENT_FILE_PATH = Path(__file__).parent.parent / "processes" / ".recent.json"
+    LAST_EXPORT_DIR_PATH = Path(__file__).parent.parent / "processes" / ".last_export_dir"
 
     def _setup_menu_bar(self):
         """Setup the menu bar"""
@@ -269,6 +270,25 @@ class MainWindow(QMainWindow):
     def _save_recent_list(self, paths: list):
         try:
             self.RECENT_FILE_PATH.write_text(json.dumps(paths, indent=2))
+        except Exception:
+            pass  # non-critical
+
+    def _load_last_export_dir(self) -> Path:
+        """Return the last directory the user exported an STL to, or HOME."""
+        try:
+            if self.LAST_EXPORT_DIR_PATH.exists():
+                text = self.LAST_EXPORT_DIR_PATH.read_text().strip()
+                if text:
+                    p = Path(text)
+                    if p.is_dir():
+                        return p
+        except Exception:
+            pass
+        return Path.home()
+
+    def _save_last_export_dir(self, directory: Path):
+        try:
+            self.LAST_EXPORT_DIR_PATH.write_text(str(directory))
         except Exception:
             pass  # non-critical
 
@@ -745,16 +765,21 @@ class MainWindow(QMainWindow):
             process_name = self.process_editor.get_process().name.replace(" ", "_")
             default_name = f"{image_stem}_{process_name}"
 
+        # Default to the directory of the last successful export so users
+        # don't have to renavigate every time. Falls back to HOME on a fresh
+        # install or if the previously saved directory has been removed.
+        start_dir = self._load_last_export_dir()
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Export STL",
-            str(Path.home() / f"{default_name}.stl"),
+            str(start_dir / f"{default_name}.stl"),
             "STL Files (*.stl);;All Files (*)"
         )
 
         if file_path:
             try:
                 self.stl_generator.save(file_path)
+                self._save_last_export_dir(Path(file_path).parent)
                 self.status_label.setText(f"Exported STL to: {file_path}")
                 QMessageBox.information(self, "Success", f"STL file saved to:\n{file_path}")
             except Exception as e:

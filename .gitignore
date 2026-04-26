@@ -38,6 +38,7 @@ env/
 *.stl
 test_output.stl
 processes/.recent.json
+processes/.last_export_dir
 
 # OS
 .DS_Store
