@@ -235,5 +235,67 @@ class TestMeshTriangleCount:
             f"Angled mesh has more faces than expected: {len(mesh.faces)} > {expected_full}"
 
 
+def generate_cylindrical_from_heightmap(height_map: np.ndarray,
+                                        pixel_size_mm: float = 0.5,
+                                        pixel_size_mm_y: float = None,
+                                        arc_degrees: float = 360.0) -> trimesh.Trimesh:
+    """Helper to generate cylindrical STL from a heightmap and load via trimesh."""
+    generator = STLGenerator()
+    stl_mesh = generator.generate_cylindrical_from_heightmap(
+        height_map,
+        pixel_size_mm=pixel_size_mm,
+        pixel_size_mm_y=pixel_size_mm_y,
+        arc_degrees=arc_degrees,
+    )
+    with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as f:
+        temp_path = f.name
+    stl_mesh.save(temp_path)
+    mesh = trimesh.load(temp_path)
+    Path(temp_path).unlink()
+    return mesh
+
+
+class TestCylindricalManifold:
+    """Cylindrical-shell meshes should be watertight, both for full wraps and partial arcs."""
+
+    def test_full_wrap_flat_heightmap_is_manifold(self):
+        height_map = np.ones((10, 20)) * 1.0
+        mesh = generate_cylindrical_from_heightmap(height_map, pixel_size_mm=1.0,
+                                                   pixel_size_mm_y=1.0, arc_degrees=360.0)
+        assert mesh.is_watertight, f"360° flat shell not watertight ({len(mesh.faces)} faces)"
+        assert mesh.is_winding_consistent
+
+    def test_full_wrap_random_heightmap_is_manifold(self):
+        np.random.seed(7)
+        height_map = np.random.uniform(0.4, 2.0, (15, 30))
+        mesh = generate_cylindrical_from_heightmap(height_map, pixel_size_mm=0.5,
+                                                   pixel_size_mm_y=0.6, arc_degrees=360.0)
+        assert mesh.is_watertight
+        assert mesh.is_winding_consistent
+
+    def test_partial_arc_is_manifold(self):
+        height_map = np.linspace(0.5, 2.0, 12 * 18).reshape(12, 18)
+        mesh = generate_cylindrical_from_heightmap(height_map, pixel_size_mm=0.7,
+                                                   pixel_size_mm_y=0.7, arc_degrees=180.0)
+        assert mesh.is_watertight, f"180° shell not watertight ({len(mesh.faces)} faces)"
+        assert mesh.is_winding_consistent
+
+    def test_full_wrap_diameter_matches_width(self):
+        # cols=20, pixel_size=1.0 -> arc_length=19mm; for 360° wrap radius=19/(2π).
+        cols, rows = 20, 10
+        height_map = np.full((rows, cols), 1.0)
+        mesh = generate_cylindrical_from_heightmap(height_map, pixel_size_mm=1.0,
+                                                   pixel_size_mm_y=1.0, arc_degrees=360.0)
+        verts = mesh.vertices
+        r_inner = 19.0 / (2.0 * np.pi)
+        r_outer = r_inner + 1.0
+        # Outer-radius vertices live at distance ~r_outer from z-axis.
+        rad = np.sqrt(verts[:, 0] ** 2 + verts[:, 1] ** 2)
+        assert abs(rad.max() - r_outer) < 1e-3, f"Max radius {rad.max()} vs expected {r_outer}"
+        # Z extent equals (rows-1) * pixel_size_mm_y = 9.
+        z_extent = verts[:, 2].max() - verts[:, 2].min()
+        assert abs(z_extent - 9.0) < 1e-6
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

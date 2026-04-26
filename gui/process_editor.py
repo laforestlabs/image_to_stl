@@ -28,7 +28,16 @@ class OperationDialog(QDialog):
                 "invert": {"type": "bool", "default": False, "label": "Invert Colors"},
                 "crop_mode": {"type": "combo", "default": "crop_to_size", "label": "Crop Mode",
                               "options": ["crop_to_size", "keep_full_image"]},
-                "background_tint": {"type": "float", "default": 0.0, "label": "Background Tint (0-100%)"}
+                "background_tint": {"type": "float", "default": 0.0, "label": "Background Tint (0-100%)"},
+                "geometry": {"type": "combo", "default": "flat", "label": "Geometry",
+                             "options": ["flat", "cylindrical"]},
+                "arc_degrees": {"type": "float", "default": 360.0, "label": "Cylindrical Arc (degrees)"}
+            }
+        },
+        "auto_contrast": {
+            "name": "Auto-contrast",
+            "parameters": {
+                "cutoff": {"type": "float", "default": 1.0, "label": "Cutoff (% to clip per side)"}
             }
         }
     }
@@ -221,7 +230,12 @@ class ProcessEditor(QWidget):
 
             # Add some parameter info
             if operation.type == "set_lithophane_parameters":
-                item_text += f" ({operation.parameters.get('width_mm')}x{operation.parameters.get('height_mm')}mm, {operation.parameters.get('min_thickness_mm')}-{operation.parameters.get('max_thickness_mm')}mm)"
+                p = operation.parameters
+                item_text += f" ({p.get('width_mm')}x{p.get('height_mm')}mm, {p.get('min_thickness_mm')}-{p.get('max_thickness_mm')}mm)"
+                if p.get("geometry") == "cylindrical":
+                    item_text += f" cyl@{p.get('arc_degrees', 360)}°"
+            elif operation.type == "auto_contrast":
+                item_text += f" (cutoff={operation.parameters.get('cutoff', 1.0)}%)"
 
             self.operations_list.addItem(item_text)
 

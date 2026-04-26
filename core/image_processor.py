@@ -17,6 +17,8 @@ class ImageProcessor:
         self.angle: float = 75.0  # Build angle in degrees
         self.pixel_size_mm: float = 0.5  # X spacing between vertices (mm)
         self.pixel_size_mm_y: float = 0.5  # Y spacing between vertices (mm)
+        self.geometry: str = "flat"  # "flat" or "cylindrical"
+        self.arc_degrees: float = 360.0  # Cylindrical wrap arc
 
     def execute_process(self, image_path: str, process: Process, crop_rect: tuple = None) -> np.ndarray:
         """
@@ -81,8 +83,25 @@ class ImageProcessor:
 
         if op_type == "set_lithophane_parameters":
             self._set_lithophane_parameters(params)
+        elif op_type == "auto_contrast":
+            self._apply_auto_contrast(params)
         else:
             raise ValueError(f"Unknown operation type: {op_type}")
+
+    def _apply_auto_contrast(self, params: dict):
+        """Stretch image contrast so darkest -> 0, brightest -> 255.
+
+        Operates on the current PIL image (color or grayscale). When listed
+        before set_lithophane_parameters, runs on the original-mode crop;
+        when listed after, runs on the L-mode lithophane image.
+        """
+        if self.current_image is None:
+            return
+        cutoff = float(params.get("cutoff", 1.0))
+        # autocontrast doesn't accept palettized/CMYK directly; normalize first.
+        if self.current_image.mode not in ("L", "RGB", "RGBA"):
+            self.current_image = self.current_image.convert("RGB")
+        self.current_image = ImageOps.autocontrast(self.current_image, cutoff=cutoff)
 
     def _set_lithophane_parameters(self, params: dict):
         """
@@ -99,10 +118,18 @@ class ImageProcessor:
         min_thickness_mm = params.get("min_thickness_mm", 0.8)  # For saturated (white) pixels
         max_thickness_mm = params.get("max_thickness_mm", 5.0)  # For black pixels
         invert = params.get("invert", False)
-        self.angle = params.get("angle", 75.0)  # Store angle for STL generation
         crop_mode = params.get("crop_mode", "crop_to_size")
         background_tint = params.get("background_tint", 0.0)  # 0-100%
         blur_mm = params.get("blur_mm", 0.0)  # Blur radius in mm
+
+        # Geometry: flat plate or wrapped cylinder. For cylinders the build
+        # angle is meaningless (the model stands on its base ring), so override.
+        self.geometry = params.get("geometry", "flat")
+        self.arc_degrees = float(params.get("arc_degrees", 360.0))
+        if self.geometry == "cylindrical":
+            self.angle = 0.0
+        else:
+            self.angle = params.get("angle", 75.0)
 
         # Calculate pixel density to achieve desired physical dimensions
         # Default 2 pixels/mm gives good quality without excessive triangles
@@ -120,7 +147,17 @@ class ImageProcessor:
         src_width, src_height = self.current_image.size
         src_aspect = src_width / src_height
 
-        if crop_mode == "crop_to_size":
+        if self.geometry == "cylindrical":
+            # Wrap-around mode: width_mm is the unrolled arc length, height_mm
+            # is the cylinder height. Crop/pad would distort the wrap, so we
+            # just stretch-resize to the target grid.
+            if self.current_image.mode not in ('L', 'RGB', 'RGBA'):
+                self.current_image = self.current_image.convert('RGB')
+            self.current_image = self.current_image.resize(
+                (target_width_pixels, target_height_pixels),
+                Image.Resampling.LANCZOS
+            )
+        elif crop_mode == "crop_to_size":
             # Crop to match target aspect ratio, then resize
             if src_aspect > target_aspect:
                 # Source is wider - crop left/right
@@ -309,3 +346,11 @@ class ImageProcessor:
     def get_pixel_size_mm_y(self) -> float:
         """Get the Y-axis vertex spacing in mm"""
         return self.pixel_size_mm_y
+
+    def get_geometry(self) -> str:
+        """Get the geometry mode ('flat' or 'cylindrical')"""
+        return self.geometry
+
+    def get_arc_degrees(self) -> float:
+        """Get the cylindrical wrap arc in degrees"""
+        return self.arc_degrees

@@ -3,11 +3,13 @@ Main application window
 """
 import json
 import random
+import time
 from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QMessageBox,
-    QLabel, QGroupBox, QFrame, QDialog, QMenuBar, QMenu, QApplication
+    QLabel, QGroupBox, QFrame, QDialog, QMenuBar, QMenu, QApplication,
+    QComboBox, QProgressBar
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QPixmap, QImage, QMovie, QAction, QKeySequence
@@ -24,6 +26,9 @@ class ProcessingWorker(QThread):
     """Background worker for image processing"""
     finished = Signal(object)  # Emits the height_map or None on error
     error = Signal(str)
+    # percent (0..100), label text. Worker maps the STL-generator's 0..100
+    # range into the 30..100 portion (image processing is the first 30%).
+    progress = Signal(float, str)
 
     def __init__(self, image_processor, stl_generator, image_path, process, crop_rect=None):
         super().__init__()
@@ -33,68 +38,131 @@ class ProcessingWorker(QThread):
         self.process = process
         self.crop_rect = crop_rect  # (x, y, w, h) normalized 0-1
 
+    def _stl_progress(self, sub_percent: float, label: str):
+        # Map sub-stage 0..100 onto overall 30..100.
+        overall = 30.0 + 0.70 * sub_percent
+        self.progress.emit(overall, label)
+
     def run(self):
         try:
-            # Process image with optional crop
+            self.progress.emit(0.0, "Loading image…")
             height_map = self.image_processor.execute_process(
                 self.image_path,
                 self.process,
                 crop_rect=self.crop_rect
             )
+            self.progress.emit(30.0, "Building mesh…")
 
-            # Generate STL with correct pixel size for proper dimensions
-            angle = self.image_processor.get_angle()
             pixel_size_mm = self.image_processor.get_pixel_size_mm()
             pixel_size_mm_y = self.image_processor.get_pixel_size_mm_y()
-            self.stl_generator.generate_from_heightmap(
-                height_map,
-                pixel_size_mm=pixel_size_mm,
-                angle=angle,
-                pixel_size_mm_y=pixel_size_mm_y,
-            )
+            geometry = self.image_processor.get_geometry()
 
+            if geometry == "cylindrical":
+                self.stl_generator.generate_cylindrical_from_heightmap(
+                    height_map,
+                    pixel_size_mm=pixel_size_mm,
+                    pixel_size_mm_y=pixel_size_mm_y,
+                    arc_degrees=self.image_processor.get_arc_degrees(),
+                    progress_cb=self._stl_progress,
+                )
+            else:
+                self.stl_generator.generate_from_heightmap(
+                    height_map,
+                    pixel_size_mm=pixel_size_mm,
+                    angle=self.image_processor.get_angle(),
+                    pixel_size_mm_y=pixel_size_mm_y,
+                    progress_cb=self._stl_progress,
+                )
+
+            self.progress.emit(100.0, "Done")
             self.finished.emit(height_map)
         except Exception as e:
             self.error.emit(str(e))
 
 
 class LoadingDialog(QDialog):
-    """Fun loading dialog with animated GIF"""
+    """Loading dialog with determinate progress bar, percent, and ETA."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Processing...")
         self.setModal(True)
-        self.setFixedSize(300, 350)
+        self.setFixedSize(360, 340)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowCloseButtonHint)
+
+        # Track elapsed time so we can estimate ETA from observed progress.
+        self._start_time = time.monotonic()
+        self._last_percent = 0.0
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
 
-        # GIF label
+        # GIF label (smaller now to make room for the progress bar)
         self.gif_label = QLabel()
         self.gif_label.setAlignment(Qt.AlignCenter)
-
-        # Load the animated GIF
         gif_path = Path(__file__).parent / "assets" / "loading.gif"
         if gif_path.exists():
             self.movie = QMovie(str(gif_path))
-            self.movie.setScaledSize(QSize(200, 200))
+            self.movie.setScaledSize(QSize(140, 140))
             self.gif_label.setMovie(self.movie)
             self.movie.start()
         else:
             self.gif_label.setText("Processing...")
-
         layout.addWidget(self.gif_label)
 
-        # Status label
-        self.status_label = QLabel("Generating your lithophane...")
+        # Stage label (e.g. "Building vertex grid…")
+        self.status_label = QLabel("Generating your lithophane…")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("font-size: 14px; color: #666;")
         layout.addWidget(self.status_label)
 
+        # Determinate progress bar.
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        layout.addWidget(self.progress_bar)
+
+        # ETA line below the bar.
+        self.eta_label = QLabel("Estimating time…")
+        self.eta_label.setAlignment(Qt.AlignCenter)
+        self.eta_label.setStyleSheet("font-size: 12px; color: #888;")
+        layout.addWidget(self.eta_label)
+
     def set_status(self, text: str):
         self.status_label.setText(text)
+
+    def set_progress(self, percent: float, label: str = ""):
+        """Update progress bar, percent, and ETA. Safe to call from the main thread."""
+        percent = max(0.0, min(100.0, float(percent)))
+        self._last_percent = percent
+        self.progress_bar.setValue(int(round(percent)))
+        if label:
+            self.status_label.setText(label)
+        elapsed = time.monotonic() - self._start_time
+        # ETA needs a few percent of progress to be meaningful — early
+        # estimates (e.g. at 1%) are wildly noisy.
+        if percent >= 5.0 and percent < 100.0:
+            remaining = elapsed * (100.0 / percent - 1.0)
+            self.eta_label.setText(f"~{_format_eta(remaining)} remaining")
+        elif percent >= 100.0:
+            self.eta_label.setText(f"Done in {_format_eta(elapsed)}")
+        else:
+            self.eta_label.setText("Estimating time…")
+
+
+def _format_eta(seconds: float) -> str:
+    """Render an ETA in a compact human form: '3s', '42s', '1m 12s'."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return f"{int(round(seconds))}s"
+    m, s = divmod(int(round(seconds)), 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
 
 
 class MainWindow(QMainWindow):
@@ -256,6 +324,17 @@ class MainWindow(QMainWindow):
         self.save_process_as_btn.clicked.connect(self._save_process_as)
         button_layout.addWidget(self.save_process_as_btn)
 
+        # Preset picker — populated from processes/presets/*.json on startup.
+        button_layout.addSpacing(15)
+        button_layout.addWidget(QLabel("Preset:"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(180)
+        self._preset_paths = []  # parallel to combo entries; empty for "(Custom)"
+        self._loading_preset = False
+        self._populate_presets()
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+        button_layout.addWidget(self.preset_combo)
+
         button_layout.addStretch()
 
         self.load_image_btn = QPushButton("Load Image")
@@ -337,6 +416,62 @@ class MainWindow(QMainWindow):
         # Load a random sample image on startup
         self._load_random_sample_image()
 
+    PRESETS_DIR = Path(__file__).parent.parent / "processes" / "presets"
+
+    def _populate_presets(self):
+        """Scan presets dir on startup and fill the combo."""
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self._preset_paths = []
+        # Always include a (Custom) sentinel as index 0.
+        self.preset_combo.addItem("(Custom)")
+        self._preset_paths.append(None)
+        if self.PRESETS_DIR.exists():
+            preset_files = sorted(self.PRESETS_DIR.glob("*.json"))
+            for path in preset_files:
+                try:
+                    proc = Process.load(path)
+                    label = proc.name or path.stem
+                except Exception:
+                    label = path.stem
+                self.preset_combo.addItem(label)
+                self._preset_paths.append(path)
+        self.preset_combo.blockSignals(False)
+
+    def _on_preset_selected(self, index: int):
+        """Load the selected preset, or ignore the (Custom) sentinel."""
+        if index <= 0:
+            return
+        path = self._preset_paths[index]
+        if path is None:
+            return
+        try:
+            process = Process.load(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load preset: {e}")
+            return
+        # _loading_preset suppresses the auto-flip-to-(Custom) below while
+        # we apply the preset to the controls.
+        self._loading_preset = True
+        try:
+            self.current_process_file = str(path)
+            self.process_editor.set_process(process)
+            self._sync_controls_from_process()
+            self.status_label.setText(f"Loaded preset: {process.name}")
+            if self.current_image_file:
+                self._process_image()
+        finally:
+            self._loading_preset = False
+
+    def _mark_custom_preset(self):
+        """Flip the combo to (Custom) when user edits parameters by hand."""
+        if self._loading_preset:
+            return
+        if self.preset_combo.currentIndex() != 0:
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.setCurrentIndex(0)
+            self.preset_combo.blockSignals(False)
+
     def _load_default_process(self):
         """Load the default process if it exists"""
         default_path = Path(__file__).parent.parent / "processes" / "default.json"
@@ -360,6 +495,7 @@ class MainWindow(QMainWindow):
 
     def _on_controls_changed(self):
         """Handle lithophane control changes - update process and reprocess"""
+        self._mark_custom_preset()
         # Get current parameters from controls
         params = self.lithophane_controls.get_parameters()
 
@@ -550,6 +686,7 @@ class MainWindow(QMainWindow):
         )
         self.worker.finished.connect(self._on_processing_finished)
         self.worker.error.connect(self._on_processing_error)
+        self.worker.progress.connect(self.loading_dialog.set_progress)
         self.worker.start()
 
     def _on_processing_finished(self, height_map):
@@ -601,6 +738,14 @@ class MainWindow(QMainWindow):
 
     def _on_process_changed(self):
         """Handle process changes - sync controls and reprocess if image is loaded"""
+        # During preset load, ProcessEditor.set_process fires textChanged on
+        # name_edit, which cascades into process_changed. _on_preset_selected
+        # owns the sync + reprocess in that path, so we must not also kick off
+        # a worker here — doing so creates a second dialog and orphans the
+        # signal connections, leaving the dialog stuck at 100%.
+        if self._loading_preset:
+            return
+        self._mark_custom_preset()
         # Sync lithophane controls when process changes via editor
         self._sync_controls_from_process()
         if self.current_image_file:

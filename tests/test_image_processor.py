@@ -160,5 +160,100 @@ class TestBorderTextures:
         assert hm.max() - hm.min() > 0.1
 
 
+class TestAutoContrast:
+    """auto_contrast operation stretches the input range."""
+
+    def test_low_contrast_grayscale_stretches_to_full_range(self):
+        # Build a low-contrast L-mode image with values in 100..150.
+        arr = np.linspace(100, 150, 100 * 100, dtype=np.uint8).reshape(100, 100)
+        img = Image.fromarray(arr, mode="L")
+        process = Process.from_dict({
+            "name": "Test",
+            "operations": [
+                {"type": "auto_contrast", "parameters": {"cutoff": 0.0}},
+                {"type": "set_lithophane_parameters", "parameters": {
+                    "width_mm": 50, "height_mm": 50,
+                    "min_thickness_mm": 0.5, "max_thickness_mm": 2.5,
+                    "pixels_per_mm": 2.0,
+                }},
+            ],
+        })
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        img.save(path)
+        try:
+            processor = ImageProcessor()
+            processor.execute_process(path, process)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        hm = processor.height_map
+        # After stretching 100..150 -> 0..255 the heightmap should span
+        # essentially the full min..max thickness range.
+        assert hm.min() < 0.55
+        assert hm.max() > 2.45
+
+    def test_auto_contrast_runs_after_lithophane_op(self):
+        # auto_contrast can also be appended after the lithophane op
+        # (operates on the L-mode result).
+        img = Image.new("L", (50, 50), 120)
+        process = Process.from_dict({
+            "name": "Test",
+            "operations": [
+                {"type": "set_lithophane_parameters", "parameters": {
+                    "width_mm": 30, "height_mm": 30,
+                    "min_thickness_mm": 0.5, "max_thickness_mm": 2.0,
+                }},
+                {"type": "auto_contrast", "parameters": {"cutoff": 0.0}},
+            ],
+        })
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        img.save(path)
+        try:
+            processor = ImageProcessor()
+            processor.execute_process(path, process)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        # Just checking it doesn't throw — height_map is built by the prior op.
+        assert processor.height_map is not None
+
+
+class TestCylindricalParams:
+    """Cylindrical mode bypasses crop/pad and forces angle=0."""
+
+    def test_cylindrical_geometry_stored_on_processor(self):
+        img = Image.new("RGB", (100, 100), (128, 128, 128))
+        proc = _process(
+            {
+                "width_mm": 100, "height_mm": 80,
+                "min_thickness_mm": 0.6, "max_thickness_mm": 2.5,
+                "pixels_per_mm": 2.0,
+                "geometry": "cylindrical", "arc_degrees": 360.0,
+                "angle": 75.0,  # should be overridden to 0 for cylindrical
+            },
+            img,
+        )
+        assert proc.get_geometry() == "cylindrical"
+        assert proc.get_arc_degrees() == 360.0
+        assert proc.get_angle() == 0.0
+
+    def test_cylindrical_does_not_aspect_crop(self):
+        # 200x100 source with width/height aspect != target shouldn't crop —
+        # cylindrical mode just resizes directly to the target grid.
+        img = Image.new("RGB", (200, 100), (200, 200, 200))
+        proc = _process(
+            {
+                "width_mm": 50, "height_mm": 50,
+                "min_thickness_mm": 0.5, "max_thickness_mm": 2.0,
+                "pixels_per_mm": 2.0,
+                "geometry": "cylindrical", "arc_degrees": 180.0,
+            },
+            img,
+        )
+        # 50mm at 2 px/mm -> 100x100 target
+        assert proc.height_map.shape == (100, 100)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -176,6 +176,32 @@ class LithophaneControls(QWidget):
 
         layout.addWidget(quality_group)
 
+        # Geometry group
+        geometry_group = QGroupBox("Geometry")
+        geometry_layout = QVBoxLayout(geometry_group)
+
+        self.geometry_button_group = QButtonGroup(self)
+        self.flat_radio = QRadioButton("Flat plate")
+        self.flat_radio.setChecked(True)
+        self.geometry_button_group.addButton(self.flat_radio, 0)
+        geometry_layout.addWidget(self.flat_radio)
+
+        self.cylindrical_radio = QRadioButton("Cylindrical (Width = unrolled arc length)")
+        self.cylindrical_radio.setToolTip(
+            "Wrap the image around a vertical cylinder.\n"
+            "Width is the unrolled arc length; for 360° wrap the diameter ≈ Width / π."
+        )
+        self.geometry_button_group.addButton(self.cylindrical_radio, 1)
+        geometry_layout.addWidget(self.cylindrical_radio)
+
+        self.arc_control = SliderWithInput("Arc (degrees)", 30, 360, 360, decimals=0)
+        self.arc_control.value_changed.connect(self._emit_changed)
+        geometry_layout.addWidget(self.arc_control)
+
+        self.geometry_button_group.buttonClicked.connect(self._on_geometry_changed)
+
+        layout.addWidget(geometry_group)
+
         # Build angle group
         angle_group = QGroupBox("Build Orientation")
         angle_layout = QVBoxLayout(angle_group)
@@ -185,6 +211,8 @@ class LithophaneControls(QWidget):
         angle_layout.addWidget(self.angle_control)
 
         layout.addWidget(angle_group)
+        # Initial enable/disable state
+        self._update_geometry_dependent_enabled()
 
         # Crop mode group
         crop_group = QGroupBox("Crop Mode")
@@ -264,12 +292,24 @@ class LithophaneControls(QWidget):
         if not self._updating:
             self._debounce_timer.start(self.DEBOUNCE_MS)
 
+    def _on_geometry_changed(self):
+        """Update enabled state when geometry mode flips, then emit."""
+        self._update_geometry_dependent_enabled()
+        self._emit_changed()
+
+    def _update_geometry_dependent_enabled(self):
+        """Arc only matters in cylindrical mode; angle only matters in flat mode."""
+        is_cyl = self.cylindrical_radio.isChecked()
+        self.arc_control.setEnabled(is_cyl)
+        self.angle_control.setEnabled(not is_cyl)
+
     def get_parameters(self) -> dict:
         """Get current parameters as a dictionary"""
         crop_mode = "crop_to_size" if self.crop_to_size_radio.isChecked() else "keep_full_image"
         # Map combo box index to texture name
         texture_names = ["solid", "gradient", "ribbed", "dotted", "wave", "crosshatch"]
         border_texture = texture_names[self.border_texture_combo.currentIndex()]
+        geometry = "cylindrical" if self.cylindrical_radio.isChecked() else "flat"
         return {
             "width_mm": self.width_control.value(),
             "height_mm": self.height_control.value(),
@@ -283,7 +323,9 @@ class LithophaneControls(QWidget):
             "border_width_mm": self.border_width_control.value(),
             "border_intensity": self.border_intensity_control.value(),
             "border_texture": border_texture,
-            "invert": self.invert_checkbox.isChecked()
+            "invert": self.invert_checkbox.isChecked(),
+            "geometry": geometry,
+            "arc_degrees": self.arc_control.value()
         }
 
     def set_parameters(self, params: dict):
@@ -321,5 +363,13 @@ class LithophaneControls(QWidget):
                 self.border_texture_combo.setCurrentIndex(texture_names.index(params["border_texture"]))
         if "invert" in params:
             self.invert_checkbox.setChecked(params["invert"])
+        if "geometry" in params:
+            if params["geometry"] == "cylindrical":
+                self.cylindrical_radio.setChecked(True)
+            else:
+                self.flat_radio.setChecked(True)
+        if "arc_degrees" in params:
+            self.arc_control.setValue(params["arc_degrees"])
 
+        self._update_geometry_dependent_enabled()
         self._updating = False

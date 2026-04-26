@@ -1,0 +1,31 @@
+{
+  "name": "Curved display (cylindrical, 180°)",
+  "operations": [
+    {
+      "type": "auto_contrast",
+      "parameters": {
+        "cutoff": 1.0
+      }
+    },
+    {
+      "type": "set_lithophane_parameters",
+      "parameters": {
+        "width_mm": 120.0,
+        "height_mm": 80.0,
+        "min_thickness_mm": 0.8,
+        "max_thickness_mm": 3.0,
+        "pixels_per_mm": 2.0,
+        "blur_mm": 0.0,
+        "angle": 0.0,
+        "crop_mode": "crop_to_size",
+        "background_tint": 0.0,
+        "border_width_mm": 0.0,
+        "border_intensity": 50.0,
+        "border_texture": "solid",
+        "invert": false,
+        "geometry": "cylindrical",
+        "arc_degrees": 180.0
+      }
+    }
+  ]
+}

@@ -5,7 +5,7 @@ Ideas to consider for future iterations. Each is tagged S/M/L for rough effort.
 ## Visualization
 
 - **Live 3D STL preview** (L) — Embed a 3D viewer (PyVista's `QtInteractor`, or VTK directly) in a tab next to the 2D processed-image preview. Updates whenever a new mesh is generated. Biggest perceived UX win — users currently have to flip to a slicer to see the mesh.
-- **Backlight simulation** (S) — In the "Processed" pane, render the grayscale heightmap as if backlit (gamma curve + soft falloff) so users can preview how the printed lithophane will look with light behind it before exporting.
+- **Backlight simulation** (S) *(deferred 2026-04-26)* — In the "Processed" pane, render the grayscale heightmap as if backlit (gamma curve + soft falloff) so users can preview how the printed lithophane will look with light behind it before exporting.
 - **Cross-section overlay** (S) — Show the heightmap as a vertical cross-section along a draggable scan line; helps users tune min/max thickness visually.
 
 ## Geometry
