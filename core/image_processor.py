@@ -147,17 +147,13 @@ class ImageProcessor:
         src_width, src_height = self.current_image.size
         src_aspect = src_width / src_height
 
-        if self.geometry == "cylindrical":
-            # Wrap-around mode: width_mm is the unrolled arc length, height_mm
-            # is the cylinder height. Crop/pad would distort the wrap, so we
-            # just stretch-resize to the target grid.
-            if self.current_image.mode not in ('L', 'RGB', 'RGBA'):
-                self.current_image = self.current_image.convert('RGB')
-            self.current_image = self.current_image.resize(
-                (target_width_pixels, target_height_pixels),
-                Image.Resampling.LANCZOS
-            )
-        elif crop_mode == "crop_to_size":
+        # The crop_mode logic applies to both flat and cylindrical geometry —
+        # for cylindrical, target_aspect (width_mm / height_mm) is the
+        # arc-length-to-height ratio of the unrolled wrap, so matching the
+        # source aspect to it preserves the image's proportions on the
+        # cylinder. (Stretch-resizing instead would visibly distort any
+        # source whose aspect doesn't already match the target.)
+        if crop_mode == "crop_to_size":
             # Crop to match target aspect ratio, then resize
             if src_aspect > target_aspect:
                 # Source is wider - crop left/right

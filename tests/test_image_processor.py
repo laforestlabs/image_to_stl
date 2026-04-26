@@ -238,21 +238,39 @@ class TestCylindricalParams:
         assert proc.get_arc_degrees() == 360.0
         assert proc.get_angle() == 0.0
 
-    def test_cylindrical_does_not_aspect_crop(self):
-        # 200x100 source with width/height aspect != target shouldn't crop —
-        # cylindrical mode just resizes directly to the target grid.
-        img = Image.new("RGB", (200, 100), (200, 200, 200))
+    def test_cylindrical_preserves_image_aspect_via_crop(self):
+        # Cylindrical mode must respect crop_mode just like flat mode does,
+        # otherwise the wrapped image visibly distorts when source aspect
+        # differs from target aspect. Build a marker image that's mostly
+        # neutral gray with a black square in the center; after a center
+        # crop+resize, the black square should still be square (equal width
+        # and height in the resulting heightmap).
+        arr = np.full((100, 200, 3), 200, dtype=np.uint8)  # 2:1 source
+        arr[40:60, 90:110] = 0  # 20x20 centered black square
+        img = Image.fromarray(arr, mode="RGB")
         proc = _process(
             {
-                "width_mm": 50, "height_mm": 50,
+                "width_mm": 50, "height_mm": 50,  # 1:1 target
                 "min_thickness_mm": 0.5, "max_thickness_mm": 2.0,
                 "pixels_per_mm": 2.0,
-                "geometry": "cylindrical", "arc_degrees": 180.0,
+                "geometry": "cylindrical", "arc_degrees": 360.0,
+                "crop_mode": "crop_to_size",
             },
             img,
         )
-        # 50mm at 2 px/mm -> 100x100 target
+        # 50mm @ 2 px/mm -> 100x100 grid.
         assert proc.height_map.shape == (100, 100)
+        # The black square should map to roughly equal width and height
+        # in the heightmap (indicating no horizontal/vertical stretch).
+        thick = proc.height_map > 1.5  # darker pixels are thicker
+        rows_with_black = np.where(thick.any(axis=1))[0]
+        cols_with_black = np.where(thick.any(axis=0))[0]
+        h_extent = rows_with_black.max() - rows_with_black.min() + 1
+        w_extent = cols_with_black.max() - cols_with_black.min() + 1
+        # Allow a few pixels' tolerance for resampling/centering.
+        assert abs(h_extent - w_extent) <= 3, (
+            f"Black square distorted: {w_extent}px wide vs {h_extent}px tall"
+        )
 
 
 if __name__ == "__main__":
